@@ -1,0 +1,25 @@
+[package]
+name        = "pegana-methodology"
+version     = "0.1.0"
+edition     = "2021"
+description = "Pure, versioned methodology functions for Pegana's peg-risk engine. Used by the engine at runtime and by pegana-replay-cli for offline verification."
+license     = "MIT"
+repository  = "https://github.com/lrafasouza/pegana"
+
+[dependencies]
+# Verifier-safe carve-out of pegana-common. Engine + other private crates
+# still get these same types via `pub use pegana_common_verify::*` in
+# pegana-common's lib.rs — methodology depends on the carved crate directly
+# so this source tree mirrors cleanly to the public pegana-replay repo.
+pegana-common-verify       = { path = "../common-verify" }
+rust_decimal               = { workspace = true }
+serde                      = { workspace = true }
+serde_json                 = { workspace = true }
+chrono                     = { workspace = true }
+toml                       = { workspace = true }
+thiserror                  = { workspace = true }
+sha2                       = "0.10"
+serde_json_canonicalizer   = "0.3"
+
+[dev-dependencies]
+proptest = "1"

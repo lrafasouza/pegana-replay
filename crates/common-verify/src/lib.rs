@@ -1,0 +1,373 @@
+//! Public, verifier-safe types for Pegana.
+//!
+//! This crate is the public-facing carve-out of the original `pegana-common`.
+//! It contains only the types needed to:
+//!
+//!   1. Parse the canonical `assets.toml` config (asset definitions,
+//!      thresholds, peg targets, intrinsic + market strategies, Pyth
+//!      staleness windows, polling cadences).
+//!   2. Deserialize the `AlertEvidence` record the public API returns
+//!      under `/v1/audit/:alert_id`.
+//!   3. Enumerate the closed set of peg states the methodology can produce.
+//!
+//! Crates outside of `pegana-replay` (engine, dispatcher, API, indexer, bot)
+//! re-export this through `pegana_common::*` and add server-side concerns on
+//! top: Redis channel names, Sentry init, webhook signing primitives,
+//! prometheus exporter, etc. None of those belong here — keeping them in the
+//! private `pegana-common` lets us mirror this single crate to a public repo
+//! without leaking operational surface.
+//!
+//! License: MIT.
+
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum AssetClass {
+    Lst,
+    StableFiat,
+    StableCdp,
+    StableRwa,
+    StableDn,
+    StableFx,
+    /// Synthetic leverage token (e.g. Hylo xSOL). Not pegged — moves with
+    /// underlying × variable leverage. Pegana monitors intrinsic-vs-market
+    /// gap as an arbitrage / redemption-stress signal, with wider thresholds
+    /// than peg-watched assets.
+    SynthLev,
+    /// Yield-bearing wrapper of a stable token (e.g. Hylo sHYUSD wraps
+    /// hyUSD with stability-pool yield). Intrinsic is the wrapper's exchange
+    /// rate × underlying NAV.
+    StableYield,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum PegTarget {
+    SOL,
+    USD,
+    BRL,
+    EUR,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TokenProgram {
+    Spl,
+    #[serde(rename = "token_2022")]
+    Token2022,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum IntrinsicStrategy {
+    SanctumLst {
+        symbol: String,
+    },
+    #[serde(rename = "fixed_1_usd")]
+    Fixed1Usd,
+    HyloCr {
+        exchange_program: String,
+        stability_pool: String,
+    },
+    /// xSOL NAV from Hylo Exchange state.
+    /// NAV (SOL) = (collateral_sol − hyusd_supply_in_sol) / xsol_supply
+    /// where hyusd_supply_in_sol = hyusd_supply × $1 / SOL_USD (Pyth).
+    HyloXsolNav {
+        exchange_program: String,
+    },
+    /// sHYUSD exchange rate from Stability Pool state.
+    /// Intrinsic_USD = (sp_hyusd_balance / shyusd_supply) × $1
+    HyloShyusdRate {
+        stability_pool: String,
+    },
+    PythFxCross {
+        feed: String,
+        invert: bool,
+    },
+    /// Generic Pyth-published redemption-rate / NAV feed (suffix `.RR`). Used
+    /// for any wrapped/yield-bearing asset whose issuer publishes its NAV via
+    /// Pyth (e.g. USDY/USD.RR — Ondo's official on-chain redemption rate).
+    /// The indexer routes the cached feed price into `intrinsic_snapshots`
+    /// and the engine consumes it directly — no per-issuer adapter needed.
+    PythRedemptionRate {
+        feed: String,
+    },
+
+    // Phase A: yield-bearing stable adapters (one variant per issuer for
+    // type-safe verify-assets and explicit account/program addresses).
+
+    // Ethena sUSDe: Task 9 found that Ethena publishes per-share NAV to Pyth
+    // as `Crypto.SUSDE/USDE.RR`, covered by the generic PythRedemptionRate
+    // variant. EthenaSusdeRate variant removed to keep the enum dead-code-free.
+
+    // Maple syrupUSDC: Task 7 found that Maple publishes the official
+    // syrupUSDC redemption rate to Pyth as `Crypto.SYRUPUSDC/USDC.RR`, so the
+    // generic `PythRedemptionRate` variant covers it. No issuer-specific
+    // adapter is needed and the previously-planned `MaplePoolNav` variant is
+    // removed to keep the enum dead-code-free.
+    /// Solayer sUSD — rebasing share rate, likely Token-2022 InterestBearing
+    /// extension or a separate share-rate account.
+    SolayerSusdRate {
+        share_account: String,
+        program: String,
+    },
+
+    /// Perena USD* — pool LP token. NAV = Σ(underlying balance × underlying USD)
+    /// / USD* supply. Multi-account read: pool PDA + N underlying vault accounts.
+    PerenaUsdStarPool {
+        pool: String,
+        underlying: Vec<String>,
+        program: String,
+    },
+
+    // OnRe ONyc: Task 8 found that OnRe publishes ONyc's NAV directly to Pyth
+    // as `Crypto.NAV.ONYC/USD` ("Crypto NAV" asset type). Consumed via the
+    // generic PythRedemptionRate variant. OnreOnycNav variant removed.
+    /// Piggybank pbUSDC vault — reads NAV from the vault PDA. Strategy is
+    /// delta-neutral funding-rate arb across ~10 perp DEXs.
+    PiggybankPbVault {
+        vault: String,
+        program: String,
+    },
+    // StreamflowUsdPlus deferred to v1.5 — USD+ not yet live on mainnet as of
+    // 2026-05-22 (Streamflow announced 2025-12-24, waitlist still open).
+    // Re-add this variant when the mint ships.
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MarketStrategy {
+    JupiterUsd {
+        numeraire: String,
+        numeraire_feed: String,
+    },
+    /// Pyth-published spot price (USD-quoted). Used for assets that have
+    /// both a redemption-rate feed AND a secondary-market spot feed on Pyth
+    /// (e.g. USDY, sUSDe, syrupUSDC). The pyth.rs source writes
+    /// market_snapshots when the configured feed updates — no Jupiter quote
+    /// needed, which unblocks engine recompute even when Jupiter is rate-
+    /// limited.
+    PythSpot { feed: String },
+    /// DexScreener-aggregated USD price (top-liquidity pair across all
+    /// indexed Solana DEXes — Raydium, Orca, Meteora, etc.). Free API at
+    /// `api.dexscreener.com`, no auth required, rate limit ~300/min.
+    /// Used as a fallback market source for assets without a Pyth spot
+    /// feed AND where Jupiter lite-api is rate-limited (R2). Lookup keyed
+    /// by the asset's mint address.
+    DexScreenerUsd,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Thresholds {
+    Bps {
+        drift: u32,
+        depeg: u32,
+        critical: u32,
+    },
+    Cr {
+        drift: u32,
+        depeg: u32,
+        critical: u32,
+        black_swan: u32,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssetConfig {
+    pub symbol: String,
+    pub name: String,
+    pub mint: String,
+    #[serde(default)]
+    pub verified: bool,
+    pub decimals: u8,
+    pub token_program: TokenProgram,
+    pub class: AssetClass,
+    pub peg_target: PegTarget,
+    pub intrinsic: IntrinsicStrategy,
+    pub market: MarketStrategy,
+    #[serde(default)]
+    pub pyth_feed_id: String,
+    #[serde(flatten)]
+    pub thresholds: ThresholdsConfig,
+    /// Whether the indexer/engine should poll this asset. Defaults to true so
+    /// existing entries Just Work. Set to `false` to keep the asset in the
+    /// canonical list (and in the DB for historical snapshots) but stop all
+    /// runtime processing — useful for assets whose market source is broken
+    /// (e.g. Jupiter TOKEN_NOT_TRADABLE) or for v1.5 placeholders.
+    #[serde(default = "default_active")]
+    pub active: bool,
+}
+
+fn default_active() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThresholdsConfig {
+    pub thresholds_bps: Option<HashMap<String, u32>>,
+    pub thresholds_cr: Option<HashMap<String, u32>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssetsFile {
+    pub assets: Vec<AssetConfig>,
+    #[serde(default)]
+    pub pyth_feeds: HashMap<String, String>,
+    #[serde(default)]
+    pub polling: PollingConfig,
+    /// Per-feed staleness window overrides. Pyth Hermes pushes at ~1Hz for
+    /// spot feeds (SOL/USD, USDC/USD, …) but issuer-attested NAV /
+    /// redemption-rate feeds (USDY/USD, SUSDE/USDE.RR, SYRUPUSDC/USDC.RR,
+    /// ONYC/USD.NAV) only step at the underlying's settlement cadence —
+    /// daily, sometimes weekly. A single global 30s window rejects those
+    /// feeds permanently. Use `[pyth_staleness.overrides]` to widen the
+    /// window per feed; the `default_secs` value (or env override) applies
+    /// to anything not listed.
+    #[serde(default)]
+    pub pyth_staleness: PythStalenessConfig,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PythStalenessConfig {
+    /// Window (seconds) applied to feeds without an override entry.
+    /// Defaults to 30s when missing.
+    pub default_secs: Option<i64>,
+    /// Per-feed-name overrides. Keys match the human feed name from
+    /// `[pyth_feeds]` (e.g. "USDY/USD"), not the hex feed_id.
+    #[serde(default)]
+    pub overrides: HashMap<String, i64>,
+}
+
+impl PythStalenessConfig {
+    /// Resolve the staleness window (seconds) for a given feed name.
+    /// Precedence: explicit override → `default_secs` → caller-provided fallback.
+    pub fn limit_for(&self, feed: &str, fallback_secs: i64) -> i64 {
+        if let Some(v) = self.overrides.get(feed) {
+            return *v;
+        }
+        self.default_secs.unwrap_or(fallback_secs)
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PollingConfig {
+    pub sanctum_poll_ms: Option<u64>,
+    pub jupiter_tick_ms: Option<u64>,
+    pub hylo_onchain_poll_ms: Option<u64>,
+    pub pyth_stream_reconnect_backoff_max_ms: Option<u64>,
+    /// Cadence for the Solayer sUSD source. Falls back to 30s in the adapter
+    /// when neither this nor `SOLAYER_POLL_MS` env are set.
+    pub solayer_poll_ms: Option<u64>,
+    /// Cadence for the Piggybank pbUSDC source. Falls back to 60s in the
+    /// adapter when neither this nor `PIGGYBANK_POLL_MS` env are set. The
+    /// share rate only changes at 48-hour epoch boundaries, so even 60s is
+    /// generous — but cheap polling lets us catch the exact transition.
+    pub piggybank_poll_ms: Option<u64>,
+    /// Minimum interval between `intrinsic_snapshots` rows written for a
+    /// single Pyth redemption-rate feed. Hermes pushes ~1 Hz but redemption
+    /// rates only change daily — this floor keeps the table from filling
+    /// with near-duplicate rows. Falls back to 30s in the Pyth source when
+    /// neither this nor `PYTH_INTRINSIC_INTERVAL_MS` env are set.
+    pub pyth_intrinsic_interval_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum PegState {
+    #[default]
+    Pegged,
+    Drift,
+    Depeg,
+    Critical,
+    BlackSwan,
+    Unknown,
+}
+
+/// In-process mirror of the `alert_evidence` row (migrations 0028 + 0031 + 0033).
+/// Used by Phase 4 API (`GET /v1/audit/:id`) and webhook payloads. Field order
+/// matches the column order in the migration files for clarity.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlertEvidence {
+    pub alert_id: uuid::Uuid,
+    pub methodology_version: String,
+    pub methodology_git_sha: Option<String>,
+    pub assets_toml_sha256: String,
+    pub inputs_frozen: serde_json::Value,
+    pub computed: serde_json::Value,
+    pub replay_artifact: Option<serde_json::Value>,
+    pub receipt_sha256: String,
+    pub onchain_tx_sig: Option<String>,
+    /// One of `not_applicable | pending | committed | retry_exhausted | wallet_drained`.
+    /// State machine enforced by the trigger from migration 0033 (ADR-0004).
+    pub commit_status: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Sanity check: assets.toml parses cleanly into the public type tree
+    /// and contains at least the post-Phase-0 required symbol set. This
+    /// double-purposes as a regression test for AssetsFile field shapes
+    /// when adding new IntrinsicStrategy / MarketStrategy variants.
+    #[test]
+    fn assets_toml_parses() {
+        let raw = include_str!("../../../assets.toml");
+        let parsed: AssetsFile = toml::from_str(raw).expect("assets.toml is valid");
+        // AC84 — Phase 0 added 4 new symbols (JupUSD, EURC, dzSOL, vSOL) and
+        // dropped JLP. The post-Phase 0 floor is 27 assets.
+        assert!(
+            parsed.assets.len() >= 27,
+            "expected at least 27 assets, found {}",
+            parsed.assets.len()
+        );
+        let symbols: Vec<_> = parsed.assets.iter().map(|a| &a.symbol).collect();
+        // Confirmed-on-mainnet symbols only — USD* remains deferred (Save
+        // Finance cToken layout still TBD, see Task 10 notes). Task 11
+        // resolved pbUSDC's mint + vault on-chain, so it joins the required
+        // set. USDY/sUSD/syrupUSDC are the other yield-bearing stables with
+        // verified mints. JupUSD/EURC/dzSOL/vSOL added in Phase 0 (AC84).
+        for required in [
+            "jitoSOL",
+            "USDC",
+            "USDT",
+            "PYUSD",
+            "hyUSD",
+            "BRZ",
+            "USDY",
+            "sUSD",
+            "syrupUSDC",
+            "pbUSDC",
+            "JupUSD",
+            "EURC",
+            "dzSOL",
+            "vSOL",
+        ] {
+            assert!(
+                symbols.iter().any(|s| s.as_str() == required),
+                "missing {required}"
+            );
+        }
+    }
+
+    #[test]
+    fn pyth_staleness_default_falls_through() {
+        let cfg = PythStalenessConfig::default();
+        assert_eq!(cfg.limit_for("SOL/USD", 30), 30);
+    }
+
+    #[test]
+    fn pyth_staleness_override_wins() {
+        let mut cfg = PythStalenessConfig {
+            default_secs: Some(60),
+            overrides: HashMap::new(),
+        };
+        cfg.overrides.insert("USDY/USD".into(), 86_400);
+        assert_eq!(cfg.limit_for("USDY/USD", 30), 86_400);
+        assert_eq!(cfg.limit_for("SOL/USD", 30), 60);
+    }
+}

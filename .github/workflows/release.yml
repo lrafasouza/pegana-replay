@@ -1,0 +1,114 @@
+name: Release
+
+# pegana-replay binary release pipeline (cargo-dist 0.30.0).
+#
+# Builds the four supported targets, attests each binary via the
+# GitHub-native Sigstore action (no key material — OIDC), uploads to a
+# GitHub Release. Triggers on `v*` AND `methodology-v*` so the CLI
+# always ships in lockstep with the methodology crate the CLI is
+# coupled to (exit-3 version-mismatch check in main.rs).
+
+on:
+  push:
+    tags:
+      - "v*"
+      - "methodology-v*"
+
+permissions:
+  contents: write       # gh release upload
+  attestations: write   # attest-build-provenance writes the Sigstore bundle
+  id-token: write       # OIDC token for Sigstore signing
+
+jobs:
+  plan:
+    name: Plan release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with: { submodules: recursive }
+
+      - name: Install dist
+        run: |
+          curl --proto '=https' --tlsv1.2 -LsSf \
+            https://github.com/axodotdev/cargo-dist/releases/download/v0.30.0/cargo-dist-installer.sh | sh
+
+      - name: dist plan (gate)
+        run: dist plan --output-format=json > plan.json
+
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: plan
+          path: plan.json
+
+  build:
+    name: Build (${{ matrix.target }})
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: x86_64-apple-darwin
+            os: macos-13
+          - target: aarch64-apple-darwin
+            os: macos-14
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+        with: { submodules: recursive }
+
+      - uses: dtolnay/rust-toolchain@1.90
+
+      - name: Install dist
+        shell: bash
+        run: |
+          curl --proto '=https' --tlsv1.2 -LsSf \
+            https://github.com/axodotdev/cargo-dist/releases/download/v0.30.0/cargo-dist-installer.sh | sh
+
+      - name: Build artifacts
+        shell: bash
+        run: dist build --target ${{ matrix.target }} --artifacts=local
+
+      # Sigstore attestation — issues a signed provenance statement
+      # binding the binary's sha256 to this workflow's OIDC identity
+      # (github.com/lrafasouza/pegana-replay). install.sh later verifies
+      # this via `gh attestation verify` (ADR-0008).
+      - name: Sigstore attest binaries
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            target/distrib/pegana-replay-*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-${{ matrix.target }}
+          path: target/distrib/
+
+  release:
+    name: Publish GitHub Release
+    needs: [plan, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: artifacts-*
+          merge-multiple: true
+          path: ./dist
+
+      - name: Install dist
+        run: |
+          curl --proto '=https' --tlsv1.2 -LsSf \
+            https://github.com/axodotdev/cargo-dist/releases/download/v0.30.0/cargo-dist-installer.sh | sh
+
+      - name: Upload to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          gh release upload "$TAG" ./dist/* --clobber

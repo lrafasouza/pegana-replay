@@ -1,0 +1,66 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/common-verify",
+    "crates/methodology",
+    "crates/pegana-replay-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.90"
+authors = ["Pegana contributors"]
+license = "MIT"
+repository = "https://github.com/lrafasouza/pegana-replay"
+
+[workspace.dependencies]
+# async runtime
+tokio = { version = "1.40", features = ["full"] }
+
+# error handling
+anyhow = "1"
+thiserror = "1"
+
+# serde
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# data
+rust_decimal = { version = "1", features = ["serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "v7", "serde"] }
+
+# http
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+
+# solana — required by replay-cli for --verify-onchain
+solana-client = "2.0"
+solana-sdk = "2.0"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+# cargo-dist binary release pipeline.
+[workspace.metadata.dist]
+cargo-dist-version    = "0.30.0"
+ci                    = ["github"]
+installers            = ["shell", "powershell"]
+allow-dirty           = ["ci"]
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+]
+hosting               = ["github"]
+install-path          = "~/.pegana/bin"
+publish-jobs          = []
+github-attestations   = true   # Sigstore via GitHub OIDC
+
+[workspace.metadata.dist.publish-binaries]
+"pegana-replay-cli" = ["pegana-replay"]

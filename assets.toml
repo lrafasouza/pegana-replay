@@ -1,0 +1,622 @@
+# Pegana — Asset universe v1.3 (23 assets active on mainnet — 6 yield-bearing stables added in Phase A; 5 Sanctum LSTs + USD* removed 2026-05-22 due to no usable market source; USD+ deferred until Streamflow mainnet launch)
+#
+# Each asset declares:
+#   - identity:        symbol, mint, name, decimals, token_program
+#   - peg:             class, peg_target
+#   - intrinsic:       which strategy to use + its config
+#   - market:          how to read market price (Jupiter quote)
+#   - oracle:          optional Pyth feed for cross-check
+#   - thresholds:      class-aware (bps for most, CR for hyUSD)
+#
+# Mints marked `verified = true` are cross-confirmed against Solscan + issuer docs.
+# Mints marked `verified = false` are TBD — `cargo xtask verify-assets` will fail CI until verified.
+
+# ============================================================
+# LSTs (7) — pegged to SOL via stake-pool accounting
+# ============================================================
+
+[[assets]]
+symbol         = "jitoSOL"
+name           = "Jito Liquid Staking"
+mint           = "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn"
+verified       = true
+decimals       = 9
+token_program  = "spl"
+class          = "lst"
+peg_target     = "SOL"
+intrinsic      = { kind = "sanctum_lst", symbol = "jitoSOL" }
+market         = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id   = "0x67be9f519b95cf24338801051f9a808eff0a578ccb388db73b7f6fe1de019ffb"
+# Calibrated 2026-05-25 from 24h p99 ~36 bps × 1.25 buffer.
+thresholds_bps = { drift = 45, depeg = 110, critical = 250 }
+
+[[assets]]
+symbol         = "mSOL"
+name           = "Marinade staked SOL"
+mint           = "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So"
+verified       = true   # confirmed via mainnet RPC + Sanctum LST list 2026-05-21
+decimals       = 9
+token_program  = "spl"
+class          = "lst"
+peg_target     = "SOL"
+intrinsic      = { kind = "sanctum_lst", symbol = "mSOL" }
+market         = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id   = "0xc2289a6a43d2ce91c6f55caec370f4acc38a2ed477f58813334c6d03749ff2a4"
+# Calibrated 2026-05-25 from 24h p99 ~33 bps.
+thresholds_bps = { drift = 40, depeg = 100, critical = 250 }
+
+[[assets]]
+symbol         = "bSOL"
+name           = "BlazeStake Staked SOL"
+mint           = "bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1"
+verified       = true   # confirmed via mainnet RPC + Sanctum LST list 2026-05-21
+decimals       = 9
+token_program  = "spl"
+class          = "lst"
+peg_target     = "SOL"
+intrinsic      = { kind = "sanctum_lst", symbol = "bSOL" }
+market         = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id   = "0x89875379e70f8fbadc17aef315adf3a8d5d160b811435537e03c97e8aac97d9c"
+# Calibrated 2026-05-25 from 24h p99 ~37 bps.
+thresholds_bps = { drift = 45, depeg = 110, critical = 250 }
+
+[[assets]]
+symbol         = "INF"
+name           = "Infinity"
+mint           = "5oVNBeEEQvYi1cX3ir8Dx5n1P7pdxydbGF2X4TxVusJm"
+verified       = true   # confirmed via mainnet RPC 2026-05-21
+decimals       = 9
+token_program  = "spl"
+class          = "lst"
+peg_target     = "SOL"
+intrinsic      = { kind = "sanctum_lst", symbol = "INF" }
+market         = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id   = "0xf51570985c642c49c2d6e50156390fdba80bb6d5f7fa389d2f012ced4f7d208f"
+# Calibrated 2026-05-25 from 24h p99 ~112 bps — INF runs hot vs the rest.
+thresholds_bps = { drift = 140, depeg = 280, critical = 560 }
+
+# Drift protocol was exploited 2026-04-01 ($285M, DPRK-linked admin key
+# compromise). TVL collapsed from $550M to <$10M; protocol is permanently
+# frozen. dSOL has no live counterparty for redemption. Soft-deactivated
+# 2026-05-26: entry preserved for historical snapshot continuity but the
+# indexer/engine skip it (active=false). See migration 0020 and
+# docs/incident-2026-04-01-drift.md.
+
+[[assets]]
+symbol         = "bbSOL"
+name           = "Bybit Staked SOL"
+mint           = "Bybit2vBJGhPF52GBdNaQfUJ6ZpThSgHBobjWZpLPb4B"
+verified       = true   # confirmed: BybitSOL per Sanctum LST list + Pyth metadata 2026-05-21
+decimals       = 9
+token_program  = "spl"
+class          = "lst"
+peg_target     = "SOL"
+intrinsic      = { kind = "sanctum_lst", symbol = "bbSOL" }
+market         = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id   = "0x2997d5f9e96563cef9151cffc4580803930826fa38c4af5062de2363720769ea"
+# Calibrated 2026-05-25 from 24h p99 ~35 bps.
+thresholds_bps = { drift = 45, depeg = 110, critical = 250 }
+
+[[assets]]
+symbol         = "JupSOL"
+name           = "Jupiter Staked SOL"
+mint           = "jupSoLaHXQiZZTSfEWMTRRgpnyFm8f6sZdosWBjx93v"
+verified       = true   # confirmed via mainnet RPC + Sanctum LST list 2026-05-21
+decimals       = 9
+token_program  = "spl"
+class          = "lst"
+peg_target     = "SOL"
+intrinsic      = { kind = "sanctum_lst", symbol = "JupSOL" }
+market         = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id   = ""  # no Pyth feed — single-source, flag low_confidence
+# Calibrated 2026-05-25 — was flapping PEGGED↔DRIFT 10×/h at drift=40, p99=45.
+thresholds_bps = { drift = 60, depeg = 150, critical = 300 }
+
+# --- Phase A Task 1 (REMOVED 2026-05-22) ---
+# Originally added 5 additional Sanctum-backed LSTs:
+# vSOL, compassSOL, BNSOL, picoSOL, hSOL.
+# Each had intrinsic from Sanctum but market = jupiter_usd, and Jupiter
+# lite-api was 429-rate-limiting all of them indefinitely (R2), so they
+# stuck at state=UNKNOWN on the dashboard. None of them has a Pyth USD
+# spot feed either (only XXXSOL/SOL.RR redemption-rate feeds). To re-add
+# later: pick one and either (a) wait for Jupiter to unblock, (b) wire
+# DexScreener as market source like sUSD/ONyc/pbUSDC, or (c) compute
+# market_usd from a SOL-denominated quote × Pyth SOL/USD.
+
+# ============================================================
+# Stablecoins (7)
+# ============================================================
+
+[[assets]]
+symbol         = "USDC"
+name           = "USD Coin"
+mint           = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+verified       = true
+decimals       = 6
+token_program  = "spl"
+class          = "stable_fiat"
+peg_target     = "USD"
+intrinsic      = { kind = "fixed_1_usd" }
+market         = { kind = "jupiter_usd", numeraire = "USDT", numeraire_feed = "USDT/USD" }  # cross via USDT to avoid self-ref
+pyth_feed_id   = "0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a"
+thresholds_bps = { drift = 15, depeg = 50, critical = 200 }
+
+[[assets]]
+symbol         = "USDT"
+name           = "Tether"
+mint           = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"
+verified       = true
+decimals       = 6
+token_program  = "spl"
+class          = "stable_fiat"
+peg_target     = "USD"
+intrinsic      = { kind = "fixed_1_usd" }
+market         = { kind = "jupiter_usd", numeraire = "USDC", numeraire_feed = "USDC/USD" }
+pyth_feed_id   = "0x2b89b9dc8fdf9f34709a5b106b472f0f39bb6ca9ce04b0fd7f2e971688e2e53b"
+thresholds_bps = { drift = 15, depeg = 50, critical = 200 }
+
+[[assets]]
+symbol         = "PYUSD"
+name           = "PayPal USD"
+mint           = "2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo"
+verified       = true
+decimals       = 6
+token_program  = "token_2022"  # ★ NOTE
+class          = "stable_fiat"
+peg_target     = "USD"
+intrinsic      = { kind = "fixed_1_usd" }
+market         = { kind = "jupiter_usd", numeraire = "USDC", numeraire_feed = "USDC/USD" }
+pyth_feed_id   = "0xc1da1b73d7f01e7ddd54b3766cf7fcd644395ad14f70aa706ec5384c59e76692"
+thresholds_bps = { drift = 15, depeg = 50, critical = 200 }
+
+[[assets]]
+symbol         = "USDe"
+name           = "Ethena USDe"
+mint           = "DEkqHyPN7GMRJ5cArtQFAWefqbZb33Hyf6s5iCwjEonT"
+verified       = true   # confirmed via Ethena docs + on-chain getMint 2026-05-21
+decimals       = 9      # NOTE: 9 on Solana (not 6) — Wormhole NTT bridged variant
+token_program  = "spl"
+class          = "stable_dn"
+peg_target     = "USD"
+intrinsic      = { kind = "fixed_1_usd" }
+market         = { kind = "jupiter_usd", numeraire = "USDC", numeraire_feed = "USDC/USD" }
+pyth_feed_id   = "0x6ec879b1e9963de5ee97e9c8710b742d6228252a5e2ca12d4ae81d7fe5ee8c5d"
+thresholds_bps = { drift = 25, depeg = 100, critical = 300 }
+
+[[assets]]
+symbol         = "USDS"
+name           = "Sky Dollar"
+mint           = "USDSwr9ApdHk5bvJKMjzff41FfuX8bSxdKcR81vTwcA"
+verified       = true
+decimals       = 6
+token_program  = "spl"
+class          = "stable_cdp"
+peg_target     = "USD"
+intrinsic      = { kind = "fixed_1_usd" }
+market         = { kind = "jupiter_usd", numeraire = "USDC", numeraire_feed = "USDC/USD" }
+pyth_feed_id   = "0x77f0971af11cc8bac224917275c1bf55f2319ed5c654a1ca955c82fa2d297ea1"
+thresholds_bps = { drift = 20, depeg = 75, critical = 250 }
+
+[[assets]]
+symbol         = "hyUSD"
+name           = "Hylo USD"
+mint           = "5YMkXAYccHSGnHn9nob9xEvv6Pvka9DZWH7nTbotTu9E"
+verified       = true
+decimals       = 6
+token_program  = "spl"
+class          = "stable_cdp"
+peg_target     = "USD"
+intrinsic      = { kind = "hylo_cr", exchange_program = "HYEXCHtHkBagdStcJCp3xbbb9B7sdMdWXFNj6mdsG4hn", stability_pool = "HysTabVUfmQBFcmzu1ctRd1Y1fxd66RBpboy1bmtDSQQ" }
+market         = { kind = "jupiter_usd", numeraire = "USDC", numeraire_feed = "USDC/USD" }
+pyth_feed_id   = ""   # no Pyth feed — CR is the source of truth
+# CR-based thresholds (Hylo Stability Mode boundaries).
+# v1.7 recalibration (2026-05-26): on-chain `total_sol_cache` now feeds CR, so
+# the reading is Hylo's actual CR (~135-150% normal range), not the inflated
+# DefiLlama-TVL CR from v1.6 (~250%). DRIFT now fires when Hylo crosses INTO
+# stability mode 2 (CR < 130%) — mode 1 (130-150%) is routine SOL volatility
+# under normal operation and shouldn't burn a notification.
+thresholds_cr  = { drift = 130, depeg = 115, critical = 105, black_swan = 100 }
+
+[[assets]]
+symbol         = "hyloSOL"
+name           = "Hylo Liquid Staking SOL"
+mint           = "hy1oXYgrBW6PVcJ4s6s2FKavRdwgWTXdfE69AxT7kPT"
+verified       = true   # confirmed via Hylo onchain-addresses + Sanctum LST list 2026-05-21
+decimals       = 9
+token_program  = "spl"
+class          = "lst"
+peg_target     = "SOL"
+intrinsic      = { kind = "sanctum_lst", symbol = "hyloSOL" }
+market         = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id   = ""   # no Pyth feed — Sanctum is the source of truth
+# Calibrated 2026-05-25 from 24h p99 ~44 bps.
+thresholds_bps = { drift = 55, depeg = 140, critical = 280 }
+
+[[assets]]
+symbol         = "hyloSOL+"
+name           = "Hylo Liquid Staking SOL Plus"
+mint           = "hy1opf2bqRDwAxoktyWAj6f3UpeHcLydzEdKjMYGs2u"
+verified       = true
+decimals       = 9
+token_program  = "spl"
+class          = "lst"
+peg_target     = "SOL"
+intrinsic      = { kind = "sanctum_lst", symbol = "hyloSOL+" }
+market         = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id   = ""
+thresholds_bps = { drift = 30, depeg = 120, critical = 350 }
+
+[[assets]]
+symbol         = "sHYUSD"
+name           = "Staked Hylo USD"
+mint           = "HnnGv3HrSqjRpgdFmx7vQGjntNEoex1SU4e9Lxcxuihz"
+verified       = true   # confirmed via Hylo onchain-addresses docs + getMint 2026-05-21
+decimals       = 6
+token_program  = "spl"
+class          = "stable_yield"
+peg_target     = "USD"
+# Intrinsic = exchange rate of sHYUSD ↔ hyUSD (Stability Pool), × $1.
+# Yield-bearing wrapper: 1 sHYUSD ≥ 1 hyUSD and grows over time.
+intrinsic      = { kind = "hylo_shyusd_rate", stability_pool = "HysTabVUfmQBFcmzu1ctRd1Y1fxd66RBpboy1bmtDSQQ" }
+market         = { kind = "jupiter_usd", numeraire = "USDC", numeraire_feed = "USDC/USD" }
+pyth_feed_id   = ""   # no Pyth feed — exchange rate is the source of truth
+# Tight thresholds — sHYUSD market should track intrinsic closely; large gap
+# = redemption stress on the Stability Pool.
+thresholds_bps = { drift = 30, depeg = 100, critical = 300 }
+
+# ============================================================
+# Synthetic leverage (1) — variable-leverage exposure, intrinsic-vs-market
+# gap signals arbitrage / redemption stress (not peg risk)
+# ============================================================
+
+[[assets]]
+symbol         = "xSOL"
+name           = "Hylo Leveraged SOL"
+mint           = "4sWNB8zGWHkh6UnmwiEtzNxL4XrN7uK9tosbESbJFfVs"
+verified       = true   # confirmed via Hylo onchain-addresses docs + getMint 2026-05-21
+decimals       = 6
+token_program  = "spl"
+class          = "synth_lev"
+peg_target     = "USD"
+# Intrinsic NAV (in SOL) = (reserve_sol − hyusd_supply × $1 / SOL_USD) / xsol_supply.
+intrinsic      = { kind = "hylo_xsol_nav", exchange_program = "HYEXCHtHkBagdStcJCp3xbbb9B7sdMdWXFNj6mdsG4hn" }
+market         = { kind = "jupiter_usd", numeraire = "USDC", numeraire_feed = "USDC/USD" }
+pyth_feed_id   = ""   # no Pyth feed — Hylo NAV is the source of truth
+# Wider thresholds — xSOL is volatile by design (variable leverage).
+# Calibrated 2026-05-25 from 24h p99 ~830 bps — previous 100/300/800 was
+# always at-critical and emitted PEGGED↔CRITICAL noise every refresh.
+thresholds_bps = { drift = 1500, depeg = 3000, critical = 6000 }
+
+[[assets]]
+symbol         = "BRZ"
+name           = "Brazilian Digital Token"
+mint           = "FtgGSFADXBtroxq8VCausXRr2of47QBf5AS1NtZCu4GD"
+verified       = true   # confirmed via Solana Explorer + Transfero 2026-05-21
+decimals       = 4
+token_program  = "spl"
+class          = "stable_fx"
+peg_target     = "BRL"
+intrinsic      = { kind = "pyth_fx_cross", feed = "USD/BRL", invert = true }
+market         = { kind = "jupiter_usd", numeraire = "USDC", numeraire_feed = "USDC/USD" }
+pyth_feed_id   = "0xd2db4dbf1aea74e0f666b0e8f73b9580d407f5e5cf931940b06dc633d7a95906"  # USD/BRL
+thresholds_bps = { drift = 100, depeg = 300, critical = 800 }  # BRZ is thinly traded
+# Deferred 2026-05-22 — Jupiter returns TOKEN_NOT_TRADABLE and DexScreener has
+# zero Solana pairs for this mint. Without any viable market source we can't
+# compute a discount, so we keep the entry (intrinsic via Pyth USD/BRL is
+# valid) but stop the source loops from polling. Re-activate when a Solana
+# DEX with BRZ liquidity ships or when an off-chain BRZ/USDT feed lands.
+active         = false
+
+# ============================================================
+# Yield-bearing stables (6) — peg-to-NAV, not peg-to-$1
+# ============================================================
+# All entries below have `verified = false` because their adapters
+# (Tasks 4-11) do not exist yet. `cargo xtask verify-assets` will fail
+# CI until each issuer's pool/oracle PDAs are confirmed and the adapter
+# returns a usable intrinsic reading on mainnet.
+#
+# Mint addresses confirmed via Solana mainnet RPC getAccountInfo on
+# 2026-05-22. Pool / oracle / program PDAs are partially populated —
+# placeholders marked `TODO_research_during_adapter_task` are expected
+# to be resolved during the corresponding per-adapter task (4-11) when
+# fixture capture forces a definitive answer.
+
+[[assets]]
+symbol         = "USDY"
+name           = "Ondo US Dollar Yield"
+mint           = "A1KLoBrKBde8Ty9qtNQUtq3C2ortoC3u7twggz7sEto6"
+verified       = true    # mint confirmed via Jupiter + mainnet RPC; NAV source = Pyth USDY/USD.RR
+decimals       = 6
+token_program  = "spl"
+class          = "stable_yield"
+peg_target     = "USD"
+# Task 4 resolution: Ondo publishes the official USDY redemption rate (their
+# NAV oracle) to Pyth as the dedicated `Crypto.USDY/USD.RR` feed. The feed
+# carries `contract_id: eth:0x96f6ef951840721adbf46ac996b59e0235cb985c` in
+# its Pyth attributes — Ondo's Ethereum redemption-price contract — which
+# confirms the feed is issuer-attested rather than market-priced. No separate
+# Solana on-chain oracle account is published, but the Pyth RR feed is
+# cross-chain and equally authoritative. Indexer's `pyth.rs` source treats
+# any `pyth_redemption_rate` asset's feed as an `intrinsic_snapshots`
+# writer — no per-issuer Rust adapter needed.
+intrinsic      = { kind = "pyth_redemption_rate", feed = "USDY/USD.RR" }
+market         = { kind = "pyth_spot", feed = "USDY/USD" }   # Pyth spot price (secondary market). Engine compares vs NAV above.
+pyth_feed_id   = "0xe393449f6aff8a4b6d3e1165a7c9ebec103685f3b41e60db4277b5b6d10e7326"
+thresholds_bps = { drift = 30, depeg = 100, critical = 250 }
+
+[[assets]]
+symbol         = "sUSDe"
+name           = "Ethena Staked USDe"
+mint           = "Eh6XEPhSwoLv5wFApukmnaVSHQ6sAnoD9BmgmwQoN2sN"
+verified       = true    # mint confirmed via docs.ethena.fi + mainnet RPC; NAV source = Pyth SUSDE/USDE.RR
+decimals       = 9       # 9 on Solana (Wormhole NTT bridged variant, matches USDe Solana pattern)
+token_program  = "spl"
+class          = "stable_yield"
+peg_target     = "USD"
+# Task 9 resolution: Ethena publishes the official sUSDe redemption rate
+# (per-share NAV vs USDE) to Pyth as `Crypto.SUSDE/USDE.RR`. The feed is
+# Ethena-attested on Ethereum — Hermes redistributes it cross-chain, so
+# consuming it from Solana is equivalent to reading the source.
+# Note: feed is USDE-quoted, not USD-quoted. USDE is Ethena's delta-neutral
+# stablecoin that trades within ~1bp of $1; engine treats value as USD-denominated.
+# Drift threshold (30bps) absorbs USDE/USD slippage comfortably.
+# Same code path as USDY (Task 4) and syrupUSDC (Task 7) — no new adapter.
+intrinsic      = { kind = "pyth_redemption_rate", feed = "SUSDE/USDE.RR" }
+market         = { kind = "pyth_spot", feed = "SUSDE/USD" }   # Pyth spot price (USD-quoted secondary market).
+pyth_feed_id   = "0xca3ba9a619a4b3755c10ac7d5e760275aa95e9823d38a84fedd416856cdba37c"
+thresholds_bps = { drift = 30, depeg = 100, critical = 300 }
+
+[[assets]]
+symbol         = "syrupUSDC"
+name           = "Maple syrupUSDC"
+mint           = "AvZZF1YaZDziPY2RCK4oJrRVrbN3mTD9NL24hPeaZeUj"
+verified       = true    # mint confirmed via Jupiter + mainnet RPC; NAV source = Pyth SYRUPUSDC/USDC.RR
+decimals       = 6
+token_program  = "spl"
+class          = "stable_yield"
+peg_target     = "USD"
+# Task 7 resolution: Maple publishes the official syrupUSDC redemption rate
+# (per-share NAV vs USDC) to Pyth as the dedicated `Crypto.SYRUPUSDC/USDC.RR`
+# feed. The feed carries `contract_id: eth:0x80ac24aA929eaF5013f6436cdA2a7ba190f5Cc0b`
+# in its Pyth attributes — Maple's Ethereum redemption-price contract — which
+# confirms the feed is issuer-attested. Since the underlying is USDC ≈ $1, the
+# feed value is the USD NAV directly. No per-issuer Rust adapter needed: the
+# indexer's `pyth.rs` source treats any `pyth_redemption_rate` asset as an
+# `intrinsic_snapshots` writer (same path as Task 4 USDY).
+intrinsic      = { kind = "pyth_redemption_rate", feed = "SYRUPUSDC/USDC.RR" }
+market         = { kind = "pyth_spot", feed = "SYRUPUSDC/USD" }   # Pyth spot price (USD-quoted secondary market).
+pyth_feed_id   = "0xe616297dab48626eaacf6d030717b25823b13ae6520b83f4735bf8deec8e2c9a"
+thresholds_bps = { drift = 30, depeg = 100, critical = 250 }
+
+[[assets]]
+symbol         = "sUSD"
+name           = "Solayer USD"
+mint           = "susdabGDNbhrnCa6ncrYo81u4s9GM8ecK2UwMyZiq4X"
+verified       = true    # adapter live + NAV decoded from Token-2022 InterestBearing extension (2026-05-22)
+decimals       = 6
+token_program  = "token_2022"   # ★ uses InterestBearing extension — rate authority = FhVcYNEe58SMtxpZGnTu2kpYJrTu2vwCZDGpPLqbd2yG
+class          = "stable_yield"
+peg_target     = "USD"
+# Token-2022 InterestBearing extension stores the rate on the mint itself
+# (read via getAccountInfo + Token-2022 extension decode). No separate share
+# account needed — adapter Task 5 will decode the extension directly.
+intrinsic      = { kind = "solayer_susd_rate", share_account = "susdabGDNbhrnCa6ncrYo81u4s9GM8ecK2UwMyZiq4X", program = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb" }
+market         = { kind = "dex_screener_usd" }   # DexScreener top-liquidity pair (Raydium pool ~$8k liquidity)
+pyth_feed_id   = ""
+# Calibrated 2026-05-25 from 24h p99 ~219 bps — sUSD sits at a sustained
+# negative gap to NAV by design (rebasing Token-2022, thin secondary).
+thresholds_bps = { drift = 275, depeg = 500, critical = 800 }
+
+# --- USD* (Perena/Save) REMOVED 2026-05-22 ---
+# USD* turned out to be a Save Finance cToken (not a Perena LP), with the
+# Save reserve fork using a custom 1560-byte layout that isn't publicly
+# decodable. Pyth Crypto.USD*/USD.RR feed exists but has no publishers.
+# Until Save publishes their IDL or Pyth feed goes live, the asset can't
+# be priced. Removed from the universe — re-add later if either path opens.
+
+[[assets]]
+symbol         = "ONyc"
+name           = "OnRe Onchain Yield Coin"
+mint           = "5Y8NV33Vv7WbnLfq3zBcKSdYPrk7g2KoiQoe7M2tcxp5"
+verified       = true    # mint confirmed via docs.onre.finance + mainnet RPC; NAV source = Pyth NAV.ONYC/USD
+decimals       = 9
+token_program  = "spl"
+class          = "stable_yield"
+peg_target     = "USD"
+# Task 8 resolution: OnRe publishes ONyc's NAV directly to Pyth as
+# `Crypto.NAV.ONYC/USD` (asset_type "Crypto NAV"). The pegana_common
+# PythRedemptionRate variant treats Pyth-published feeds as intrinsic_usd
+# regardless of whether they're "Redemption Rate" or "NAV" type — both
+# semantically represent the issuer-attested per-share intrinsic value.
+# NAV is NOT pegged to $1 by design — reflects reinsurance underwriting yield.
+# Same code path as USDY/syrupUSDC/sUSDe — no new adapter.
+intrinsic      = { kind = "pyth_redemption_rate", feed = "ONYC/USD.NAV" }
+market         = { kind = "dex_screener_usd" }   # DexScreener top-liquidity pair (Orca pool ~$5.1M liquidity)
+pyth_feed_id   = ""
+# Wider thresholds — ONyc NAV drifts upward by design; large negative gap
+# means a redemption arbitrage opportunity rather than a peg break.
+thresholds_bps = { drift = 100, depeg = 300, critical = 800 }
+
+[[assets]]
+symbol         = "pbUSDC"
+name           = "Piggybank USDC Vault"
+mint           = "F35yYmTR6PqkbTx449P1eGhB57mRhWAdYs93eCo2dMZR"
+verified       = true    # Task 11 (2026-05-22) — on-chain layout decoded, NAV cross-checks vs published ~21% APY
+decimals       = 6
+token_program  = "spl"
+class          = "stable_yield"
+peg_target     = "USD"
+# Discovery trail (Task 11, 2026-05-22):
+#   1. Bing/Google surfaced pbUSDC mint via TradingView Raydium pair
+#      `PBUSDCUSDC_AN4SIM.USD` and a Jupiter market link on piggybank.fi.
+#   2. RPC getAccountInfo → mint `F35yYm…` is a vanilla SPL Token, 6dp,
+#      mint authority `91LYov1N1j62Q3ipuBi8w2e5GVqjVxWTdJ757roiWXdy`.
+#   3. The mint-authority account itself is the Piggybank vault state PDA,
+#      owned by program `Pig1CsXnfDwN1NuoeNRBojohbjc14dogmJCXeb2vL3Y`
+#      (Pig1… vanity prefix confirms the Piggybank brand).
+#   4. piggybank.gitbook.io/docs cross-confirmed program ID `Pig1Cs…` and
+#      vault account `91LYov…` (queried via the gitbook `?ask=` endpoint).
+#   5. Account data starts with ASCII discriminator `PBKTOKEN` and encodes
+#      pbUSDC mint + USDC mint + total_shares + total_assets (+ per-epoch
+#      flow components for analytics, kept verbatim in the indexer's meta).
+#      NAV = total_assets / total_shares ≈ 1.113 at slot 421435319, which
+#      matches Piggybank's published 21% APY × ~7 months live (epoch 105).
+intrinsic      = { kind = "piggybank_pb_vault", vault = "91LYov1N1j62Q3ipuBi8w2e5GVqjVxWTdJ757roiWXdy", program = "Pig1CsXnfDwN1NuoeNRBojohbjc14dogmJCXeb2vL3Y" }
+market         = { kind = "dex_screener_usd" }   # DexScreener top-liquidity pair (Raydium AN4SiMu… ~$65k liquidity)
+pyth_feed_id   = ""
+thresholds_bps = { drift = 30, depeg = 100, critical = 250 }
+
+# USD+ (Streamflow) was planned for Phase A but is NOT YET LIVE on mainnet
+# as of 2026-05-22. Streamflow announced 2025-12-24 with a waitlist; no mint
+# has shipped. Deferred to v1.5 — re-add this block (and Task 6 adapter)
+# after Streamflow publishes the USD+ mint address.
+
+# ============================================================
+# Trust Layer v0.1.0 — Phase 0 additions (2026-05-28)
+# ------------------------------------------------------------
+# 4 new assets enter passive 14-day calibration window
+# (2026-05-28 → 2026-06-10). Activated at launch (2026-06-11) per the
+# per-asset rule in ADR-0002. JLP DROPPED from Phase 0 (no
+# JupiterPerpsNav IntrinsicStrategy yet; deferred to Phase 14).
+# ============================================================
+
+[[assets]]
+symbol         = "JupUSD"
+name           = "Jupiter USD"
+# Mainnet mint confirmed via developers.jup.ag/docs/jupusd (2026-05-28).
+mint           = "JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD"
+verified       = true
+decimals       = 6
+token_program  = "spl"
+class          = "stable_dn"          # Delta-neutral synthetic (BlackRock BUIDL backing)
+peg_target     = "USD"
+intrinsic      = { kind = "fixed_1_usd" }
+market         = { kind = "jupiter_usd", numeraire = "USDC", numeraire_feed = "USDC/USD" }
+# Mainnet Pyth feed Crypto.JUPUSD/USD confirmed via hermes.pyth.network 2026-05-28.
+pyth_feed_id   = "0x8ed858a2214e892c9371694fb6c8a9037b6ed4052c4edf209f8cb988484e81d9"
+# Mirrors USDe thresholds given similar delta-neutral mechanism.
+thresholds_bps = { drift = 25, depeg = 100, critical = 300 }
+active         = false                # → true on 2026-06-11 per ADR-0002 if calibration green
+
+[[assets]]
+symbol         = "EURC"
+name           = "Circle Euro Coin"
+# Mainnet mint confirmed via developers.circle.com/stablecoins/eurc-contract-addresses (2026-05-28).
+mint           = "HzwqbKZw8HxMN6bF2yFZNrht3c2iXXzpKcFu7uBEDKtr"
+verified       = true
+decimals       = 6
+token_program  = "spl"
+class          = "stable_fx"          # EUR-pegged, not USD (matches BRZ pattern)
+peg_target     = "EUR"
+# Intrinsic: invert USD/EUR cross. Pyth publishes FX.EUR/USD; with invert=false we use it directly as EUR-per-USD.
+intrinsic      = { kind = "pyth_fx_cross", feed = "EUR/USD", invert = false }
+market         = { kind = "jupiter_usd", numeraire = "USDC", numeraire_feed = "USDC/USD" }
+# Mainnet Pyth feed Crypto.EURC/USD confirmed via hermes.pyth.network 2026-05-28.
+pyth_feed_id   = "0x76fa85158bf14ede77087fe3ae472f66213f6ea2f5b411cb2de472794990fa5c"
+thresholds_bps = { drift = 20, depeg = 75, critical = 250 }
+active         = false
+
+[[assets]]
+symbol         = "dzSOL"
+name           = "DoubleZero Staked SOL"
+# Mainnet mint confirmed via solanacompass.com stake pool 3fV1sdGeXaNEZj6EPDTpub82pYxcRXwt2oie6jkSzeWi (2026-05-28).
+# Sanctum LST registry confirmed via extra-api.sanctum.so/v1/lsts (245 LSTs catalog).
+mint           = "Gekfj7SL2fVpTDxJZmeC46cTYxinjB6gkAnb6EGT6mnn"
+verified       = true
+decimals       = 9
+token_program  = "spl"
+class          = "lst"
+peg_target     = "SOL"
+intrinsic      = { kind = "sanctum_lst", symbol = "dzSOL" }
+market         = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+# No Pyth feed for dzSOL as of 2026-05-28 (hermes.pyth.network returned empty for query).
+# Confidence checks disabled until Pyth lists the feed.
+pyth_feed_id   = ""
+thresholds_bps = { drift = 50, depeg = 120, critical = 280 }
+active         = false
+
+[[assets]]
+symbol         = "vSOL"
+name           = "The Vault Staked SOL (Sanctum)"
+# Mainnet mint confirmed via solanacompass.com stake pool Fu9BYC6tWBo1KMKaP3CFoKfRhqv9akmy3DuYwnCyWiyC (2026-05-28).
+mint           = "vSoLxydx6akxyMD9XEcPvGYNGq6Nn66oqVb3UkGkei7"
+# Sanctum LST registry confirmed via extra-api.sanctum.so/v1/lsts (2026-05-28).
+verified       = true
+decimals       = 9
+token_program  = "spl"
+class          = "lst"
+peg_target     = "SOL"
+intrinsic      = { kind = "sanctum_lst", symbol = "vSOL" }
+market         = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+# No Pyth feed for vSOL as of 2026-05-28.
+pyth_feed_id   = ""
+# Wider tolerance — vSOL has more validator turnover by design.
+thresholds_bps = { drift = 55, depeg = 140, critical = 300 }
+active         = false
+
+# JLP (Jupiter Perps LP) intentionally NOT added in Phase 0. Reason: no
+# IntrinsicStrategy variant exists yet for "Jupiter Perps pool NAV" (the
+# pool composition is dynamic SOL/BTC/ETH/USDC). The Fixed1Usd / SanctumLst
+# / Pyth* variants are all semantically wrong. JLP deferred to Phase 14
+# pending implementation of a JupiterPerpsNav IntrinsicStrategy. Pyth feed
+# JLP/USD = 0xc811abc82b4bad1f9bd711a2773ccaa935b03ecef974236942cec5e0eb845a3a
+# is confirmed for future use.
+
+# ============================================================
+# Pyth feeds (used by multiple assets, cached centrally)
+# ============================================================
+
+[pyth_feeds]
+"SOL/USD"       = "0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d"
+"USDC/USD"      = "0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a"
+"USDT/USD"      = "0x2b89b9dc8fdf9f34709a5b106b472f0f39bb6ca9ce04b0fd7f2e971688e2e53b"
+"USD/BRL"       = "0xd2db4dbf1aea74e0f666b0e8f73b9580d407f5e5cf931940b06dc633d7a95906"
+# Ondo USDY redemption-rate (NAV) feed — issuer-attested, see USDY block above.
+"USDY/USD.RR"   = "0xe3d1723999820435ebab53003a542ff26847720692af92523eea613a9a28d500"
+# Maple syrupUSDC redemption-rate (NAV vs USDC) — issuer-attested, see syrupUSDC block above.
+"SYRUPUSDC/USDC.RR" = "0x2ad31d1c4a85fbf2156ce57fab4104124c5ef76a6386375ecfc8da1ed5ce1486"
+# Ethena sUSDe redemption-rate (NAV vs USDE) — issuer-attested, see sUSDe block above.
+"SUSDE/USDE.RR" = "0x271c64ce459937abf721d42552035713b6c58f80eeceab716a624607fda4b10f"
+# OnRe ONyc NAV (Pyth "Crypto NAV" type, USD-denominated) — issuer-attested, see ONyc block above.
+"ONYC/USD.NAV" = "0xbabbfcc7f46b6e7df73adcccece8b6782408ed27c4e77f35ba39a449440170ab"
+# Spot/secondary-market Pyth feeds for yield-bearing stables — consumed by
+# the pyth.rs source's spot-market routing as `market_usd` for the assets
+# above. Pegana then computes discount = 1 − spot ÷ NAV per asset.
+"USDY/USD"       = "0xe393449f6aff8a4b6d3e1165a7c9ebec103685f3b41e60db4277b5b6d10e7326"
+"SUSDE/USD"      = "0xca3ba9a619a4b3755c10ac7d5e760275aa95e9823d38a84fedd416856cdba37c"
+"SYRUPUSDC/USD"  = "0xe616297dab48626eaacf6d030717b25823b13ae6520b83f4735bf8deec8e2c9a"
+
+# Trust Layer v0.1.0 Phase 0 additions (mainnet, confirmed via hermes.pyth.network 2026-05-28).
+"JUPUSD/USD"     = "0x8ed858a2214e892c9371694fb6c8a9037b6ed4052c4edf209f8cb988484e81d9"
+"EURC/USD"       = "0x76fa85158bf14ede77087fe3ae472f66213f6ea2f5b411cb2de472794990fa5c"
+"EUR/USD"        = "0xa995d00bb36a63cef7fd2c287dc105fc8f3d93779f062f09551b0af3e81ec30b"
+
+# ============================================================
+# Polling cadences (env vars override these)
+# ============================================================
+
+[polling]
+sanctum_poll_ms      = 15000   # batch call for all LSTs at once
+jupiter_tick_ms      = 2500    # 0.4 RPS × concurrency=1 keeps us under the 0.5 RPS keyless budget; ~50s per asset across the ~19 jupiter-backed slots
+hylo_onchain_poll_ms = 30000
+piggybank_poll_ms    = 60000   # NAV only changes at 48h epoch boundaries
+pyth_stream_reconnect_backoff_max_ms = 30000
+
+# ============================================================
+# Pyth staleness windows
+# ============================================================
+# Spot feeds (SOL/USD, USDC/USD, …) update at ~1 Hz, so the 30s default
+# is right. Issuer-attested NAV / redemption-rate feeds only step at the
+# underlying's settlement cadence (daily for USDY/SUSDE/SYRUPUSDC,
+# weekly+ for ONyc). The previous global 30s window was rejecting these
+# permanently, leaving USDY/SUSDE/SYRUPUSDC/ONyc stuck at state=UNKNOWN
+# on the dashboard. 36h covers a daily-step feed plus weekend gaps.
+
+[pyth_staleness]
+default_secs = 30
+
+[pyth_staleness.overrides]
+"USDY/USD"            = 129600   # 36h — daily Ondo NAV step
+"SUSDE/USDE.RR"       = 129600   # 36h — daily Ethena redemption rate
+"SYRUPUSDC/USDC.RR"   = 129600   # 36h — daily Maple redemption rate
+"ONYC/USD.NAV"        = 604800   # 7d  — weekly Ondo NAV step
