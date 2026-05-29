@@ -59,11 +59,15 @@ cargo-dist-version    = "0.30.0"
 ci                    = ["github"]
 installers            = ["shell", "powershell"]
 allow-dirty           = ["ci"]
+# Windows MSVC dropped from v0.1.0 — openssl-sys (transitively from
+# solana-client) fails to locate OpenSSL on the GitHub windows-latest
+# runner. Vendored-openssl fix would add 5-10min to every build; not
+# worth it for an audience that's effectively all Mac+Linux. Add back
+# in a future release if a user asks.
 targets = [
     "x86_64-unknown-linux-gnu",
     "x86_64-apple-darwin",
     "aarch64-apple-darwin",
-    "x86_64-pc-windows-msvc",
 ]
 hosting               = ["github"]
 install-path          = "~/.pegana/bin"

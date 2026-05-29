@@ -54,8 +54,8 @@ jobs:
             os: macos-13
           - target: aarch64-apple-darwin
             os: macos-14
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
+          # Windows MSVC dropped: openssl-sys (via solana-client) fails
+          # to locate OpenSSL on the runner. See Cargo.toml comment.
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
