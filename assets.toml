@@ -1,4 +1,4 @@
-# Pegana — Asset universe v1.4 (22 assets active on mainnet, 28 total entries; 6 inactive via `active = false`: BRZ, JupUSD, EURC, dzSOL, vSOL, JLP. Historical context: 6 yield-bearing stables added in Phase A; 5 Sanctum LSTs + USD* removed 2026-05-22 due to no usable market source; USD+ deferred until Streamflow mainnet launch; JLP added 2026-05-29 to close Phase 0 gap.)
+# Pegana — Asset universe v1.4 (21 assets active on mainnet, 28 total entries; 7 inactive via `active = false`: BRZ, JupUSD, EURC, dzSOL, vSOL, JLP, pbUSDC. Historical context: 6 yield-bearing stables added in Phase A; 5 Sanctum LSTs + USD* removed 2026-05-22 due to no usable market source; USD+ deferred until Streamflow mainnet launch; JLP added 2026-05-29 to close Phase 0 gap.)
 #
 # Each asset declares:
 #   - identity:        symbol, mint, name, decimals, token_program
@@ -465,6 +465,13 @@ intrinsic      = { kind = "piggybank_pb_vault", vault = "91LYov1N1j62Q3ipuBi8w2e
 market         = { kind = "dex_screener_usd" }   # DexScreener top-liquidity pair (Raydium AN4SiMu… ~$65k liquidity)
 pyth_feed_id   = ""
 thresholds_bps = { drift = 30, depeg = 100, critical = 250 }
+# Deactivated 2026-06-01 — the only DexScreener pair returned collapsed to a
+# ~$34-liquidity dust pool printing garbage premiums ($1.46/$1.80/$2.34 vs
+# ~$1.10 NAV). The source premium-gate (commit 9fb9104) correctly rejects
+# these, but with no liquid market there is nothing to publish — better to
+# remove pbUSDC from the public universe than show a stale/garbage price.
+# Re-activate when a deep-liquidity market source exists. See migration 0040.
+active         = false
 
 # USD+ (Streamflow) was planned for Phase A but is NOT YET LIVE on mainnet
 # as of 2026-05-22. Streamflow announced 2025-12-24 with a waitlist; no mint
