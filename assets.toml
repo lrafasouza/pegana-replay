@@ -1,4 +1,4 @@
-# Pegana — Asset universe v1.3 (23 assets active on mainnet — 6 yield-bearing stables added in Phase A; 5 Sanctum LSTs + USD* removed 2026-05-22 due to no usable market source; USD+ deferred until Streamflow mainnet launch)
+# Pegana — Asset universe v1.4 (22 assets active on mainnet, 28 total entries; 6 inactive via `active = false`: BRZ, JupUSD, EURC, dzSOL, vSOL, JLP. Historical context: 6 yield-bearing stables added in Phase A; 5 Sanctum LSTs + USD* removed 2026-05-22 due to no usable market source; USD+ deferred until Streamflow mainnet launch; JLP added 2026-05-29 to close Phase 0 gap.)
 #
 # Each asset declares:
 #   - identity:        symbol, mint, name, decimals, token_program
@@ -137,7 +137,7 @@ token_program  = "spl"
 class          = "stable_fiat"
 peg_target     = "USD"
 intrinsic      = { kind = "fixed_1_usd" }
-market         = { kind = "jupiter_usd", numeraire = "USDT", numeraire_feed = "USDT/USD" }  # cross via USDT to avoid self-ref
+market         = { kind = "pyth_spot", feed = "USDC/USD" }  # H5: own Pyth USDC/USD spot — breaks the USDC<->USDT numéraire cycle (no degenerate same-mint Jupiter quote)
 pyth_feed_id   = "0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a"
 thresholds_bps = { drift = 15, depeg = 50, critical = 200 }
 
@@ -151,7 +151,7 @@ token_program  = "spl"
 class          = "stable_fiat"
 peg_target     = "USD"
 intrinsic      = { kind = "fixed_1_usd" }
-market         = { kind = "jupiter_usd", numeraire = "USDC", numeraire_feed = "USDC/USD" }
+market         = { kind = "pyth_spot", feed = "USDT/USD" }  # H5: own Pyth USDT/USD spot — breaks the USDC<->USDT numéraire cycle
 pyth_feed_id   = "0x2b89b9dc8fdf9f34709a5b106b472f0f39bb6ca9ce04b0fd7f2e971688e2e53b"
 thresholds_bps = { drift = 15, depeg = 50, critical = 200 }
 
@@ -499,6 +499,34 @@ thresholds_bps = { drift = 25, depeg = 100, critical = 300 }
 active         = false                # → true on 2026-06-11 per ADR-0002 if calibration green
 
 [[assets]]
+symbol         = "JLP"
+name           = "Jupiter Perpetuals LP"
+# Mainnet mint confirmed via developers.jup.ag/perps (2026-05-29) and
+# `getAccountInfo` returned mint authority `AVzP2GeRmqGphJsMxWoqjpUifPpCret7LqWhD8NWQK49`
+# (Jupiter Perpetuals program), 6 decimals, supply ~230M tokens.
+# Jupiter Perpetual Exchange TVL: $638M (DefiLlama 2026-05-29).
+mint           = "27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4"
+verified       = true
+decimals       = 6
+token_program  = "spl"
+# Class: yield-bearing LP token. JLP earns from perps fees, funding rate,
+# and pool spread. Intrinsic NAV (Jupiter's official redemption rate) is
+# attested via the dedicated Pyth Redemption Rate feed; secondary market
+# trades on Orca with ~$3M liquidity. Same engine code-path as USDY /
+# sUSDe / syrupUSDC — no new adapter needed.
+class          = "stable_yield"
+peg_target     = "USD"
+intrinsic      = { kind = "pyth_redemption_rate", feed = "JLP/USD.RR" }
+market         = { kind = "pyth_spot", feed = "JLP/USD" }
+pyth_feed_id   = "0xc811abc82b4bad1f9bd711a2773ccaa935b03ecef974236942cec5e0eb845a3a"
+# Wider thresholds — JLP is a perps-LP basket, not a peg. Drift band reflects
+# normal NAV-vs-spot variance from market-making activity; depeg band reflects
+# stress (perps liquidation events, redemption queue backlog); critical band
+# reflects structural break (oracle stale, redemption halted).
+thresholds_bps = { drift = 200, depeg = 500, critical = 1500 }
+active         = false                # → true on 2026-06-11 per ADR-0002 if calibration green
+
+[[assets]]
 symbol         = "EURC"
 name           = "Circle Euro Coin"
 # Mainnet mint confirmed via developers.circle.com/stablecoins/eurc-contract-addresses (2026-05-28).
@@ -590,6 +618,12 @@ active         = false
 "JUPUSD/USD"     = "0x8ed858a2214e892c9371694fb6c8a9037b6ed4052c4edf209f8cb988484e81d9"
 "EURC/USD"       = "0x76fa85158bf14ede77087fe3ae472f66213f6ea2f5b411cb2de472794990fa5c"
 "EUR/USD"        = "0xa995d00bb36a63cef7fd2c287dc105fc8f3d93779f062f09551b0af3e81ec30b"
+
+# Trust Layer v0.1.0 Phase 0b addition (2026-05-29) — JLP closes the major
+# yield-bearing gap that the original Phase 0 commit silently dropped.
+# Same code-path as USDY/syrupUSDC/sUSDe/ONyc — pyth.rs handles RR + spot.
+"JLP/USD.RR"     = "0x6704952e00b6a088b6dcdb8170dcd591eaf64cff9e996ca75ae0ca55bfb96687"
+"JLP/USD"        = "0xc811abc82b4bad1f9bd711a2773ccaa935b03ecef974236942cec5e0eb845a3a"
 
 # ============================================================
 # Polling cadences (env vars override these)

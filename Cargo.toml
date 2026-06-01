@@ -59,14 +59,22 @@ cargo-dist-version    = "0.30.0"
 ci                    = ["github"]
 installers            = ["shell", "powershell"]
 allow-dirty           = ["ci"]
-# Windows MSVC dropped from v0.1.0 — openssl-sys (transitively from
-# solana-client) fails to locate OpenSSL on the GitHub windows-latest
-# runner. Vendored-openssl fix would add 5-10min to every build; not
-# worth it for an audience that's effectively all Mac+Linux. Add back
-# in a future release if a user asks.
+# v0.1.0 release matrix is limited to the two targets that GitHub Actions
+# runners can build today without bespoke setup:
+#   - x86_64-unknown-linux-gnu (ubuntu-latest)
+#   - aarch64-apple-darwin     (macos-14)
+# Dropped from this release:
+#   - x86_64-pc-windows-msvc   : openssl-sys (via solana-client) can't find
+#                                OpenSSL on windows-latest. Vendored-openssl
+#                                works but adds 5-10min to every build.
+#   - x86_64-apple-darwin      : the macos-13 (Intel Mac) runner queue is
+#                                effectively dead in 2026 — GitHub
+#                                deprecated x86_64 macOS hosts when M1+ Macs
+#                                became the default for developer tooling.
+#                                Real users on Intel Macs build from source
+#                                via `cargo install --git`.
 targets = [
     "x86_64-unknown-linux-gnu",
-    "x86_64-apple-darwin",
     "aarch64-apple-darwin",
 ]
 hosting               = ["github"]

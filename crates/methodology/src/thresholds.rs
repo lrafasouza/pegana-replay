@@ -231,4 +231,20 @@ mod tests {
             PegState::BlackSwan
         );
     }
+
+    /// H2 consequence guard. A missing hyUSD collateral ratio USED to be
+    /// synthesized to CR = 1.0 via `unwrap_or(Decimal::ONE)`. This pins exactly
+    /// why that was a false alarm: CR = 1.0 → cr_pct = 100, which is NOT
+    /// `< black_swan(100)` but IS `< critical(110)`, so it reads as Critical.
+    /// The H2 fix (engine `try_recompute`) skips the tick instead of feeding
+    /// this fabricated value here — if anyone reverts that, this is the state a
+    /// silent CR read-failure would have published.
+    #[test]
+    fn cr_one_reads_as_critical_h2_consequence() {
+        assert_eq!(
+            state_for_cr(Decimal::ONE, &cr_thresholds()),
+            PegState::Critical,
+            "synthesized CR=1.0 fires a FALSE Critical — H2 skips the tick instead",
+        );
+    }
 }

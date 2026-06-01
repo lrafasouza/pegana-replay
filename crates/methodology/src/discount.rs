@@ -12,26 +12,28 @@ use rust_decimal::Decimal;
 /// yield / FX assets stay on the USD path because the USD value IS the
 /// invariant for those.
 ///
-/// Returns `Decimal::ZERO` when `intrinsic` is zero (avoids div-by-zero;
-/// engine treats that as "no signal, skip publish").
+/// Returns `None` when `intrinsic` is zero/absent — there is no economic
+/// reading to report, and a zero/absent intrinsic must NOT be laundered into
+/// `discount = 0`, which the state machine would read as a confirmed healthy
+/// peg. The engine treats `None` as "no signal · skip publish" (hardening H8).
 pub fn compute_discount(
     intrinsic: Decimal,
     market: Decimal,
     intrinsic_sol: Option<Decimal>,
     market_sol: Option<Decimal>,
     class: AssetClass,
-) -> Decimal {
+) -> Option<Decimal> {
     if intrinsic.is_zero() {
-        return Decimal::ZERO;
+        return None;
     }
     if matches!(class, AssetClass::Lst) {
         if let (Some(i_sol), Some(m_sol)) = (intrinsic_sol, market_sol) {
             if !i_sol.is_zero() {
-                return Decimal::ONE - (m_sol / i_sol);
+                return Some(Decimal::ONE - (m_sol / i_sol));
             }
         }
     }
-    Decimal::ONE - (market / intrinsic)
+    Some(Decimal::ONE - (market / intrinsic))
 }
 
 /// Plausibility filter for raw discount samples.
@@ -54,7 +56,7 @@ mod tests {
     use std::str::FromStr;
 
     #[test]
-    fn zero_intrinsic_returns_zero() {
+    fn zero_intrinsic_returns_none() {
         let d = compute_discount(
             Decimal::ZERO,
             Decimal::ONE,
@@ -62,7 +64,10 @@ mod tests {
             None,
             AssetClass::StableFiat,
         );
-        assert_eq!(d, Decimal::ZERO);
+        assert_eq!(
+            d, None,
+            "zero intrinsic must NOT confirm a peg (discount 0)"
+        );
     }
 
     #[test]
@@ -74,7 +79,7 @@ mod tests {
             None,
             AssetClass::StableFiat,
         );
-        assert_eq!(d, Decimal::from_str("0.01").unwrap());
+        assert_eq!(d, Some(Decimal::from_str("0.01").unwrap()));
     }
 
     #[test]
@@ -91,7 +96,7 @@ mod tests {
             Some(m_sol),
             AssetClass::Lst,
         );
-        assert_eq!(d, Decimal::ZERO);
+        assert_eq!(d, Some(Decimal::ZERO));
     }
 
     #[test]
@@ -102,7 +107,8 @@ mod tests {
             None,
             None,
             AssetClass::Lst,
-        );
+        )
+        .expect("non-zero intrinsic yields Some");
         assert!(
             (d - Decimal::from_str("0.0090909").unwrap()).abs()
                 < Decimal::from_str("0.0001").unwrap()

@@ -13,6 +13,17 @@ pub struct PythEntry {
     pub publish_time: DateTime<Utc>,
 }
 
+/// Frozen inputs captured at decision time and hashed into the receipt.
+///
+/// INVARIANT — NO FLOATS IN THE RECEIPT. Every numeric field here (and in
+/// [`Computed`] / [`PythEntry`]) MUST be `rust_decimal::Decimal` /
+/// `Option<Decimal>`, never `f64`/`f32`. The receipt is canonicalised (RFC 8785
+/// JCS, see `canonical.rs`) then sha256'd; an `f64` serialises with
+/// platform/locale-dependent shortest-round-trip formatting, so the *same* value
+/// can hash differently across builds/arches. A divergent hash is then read as
+/// "receipt does not match its inputs" and the alert is silently suppressed —
+/// the exact missing-data failure mode ADR-0019 exists to prevent. Pinned by
+/// `canonical::tests::receipt_hash_is_deterministic`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InputsFrozen {
     pub asset: String,
@@ -35,6 +46,8 @@ pub struct InputsFrozen {
     pub decay_down_secs: i64,
 }
 
+/// Engine output frozen into the receipt. Same NO-FLOATS invariant as
+/// [`InputsFrozen`]: `discount_*` are `Decimal`, never `f64`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Computed {
     pub discount_raw: Decimal,
