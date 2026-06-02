@@ -61,7 +61,7 @@ pegana-replay --alert-id 0190ab12-3456-7890-abcd-ef0123456789 --verify-onchain
 # 4. Verify the binary's provenance via the Sigstore attestation issued
 #    by this repo's CI (linux-x86_64 / darwin-aarch64 release binaries).
 gh attestation verify ~/.pegana/bin/pegana-replay \
-  --owner lrafasouza --repo pegana-replay
+  --repo lrafasouza/pegana-replay
 ```
 
 ## Versioning
