@@ -1,6 +1,11 @@
 [package]
 name        = "pegana-replay-cli"
-version     = "0.1.0"
+# Tracks the methodology crate version (0.2.0): the CLI's verify-identity is
+# pegana_methodology::methodology_version(), so the published CLI version must
+# equal the methodology version it embeds, else the install hint in
+# main.rs (VERSION_MISMATCH → "install --version <methodology_version>")
+# points at a release that doesn't exist. See docs/.../10-distribution.md §8.
+version     = "0.2.0"
 edition     = "2021"
 description = "Reproduce and verify a Pegana alert from its public receipt."
 license     = "MIT"

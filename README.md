@@ -43,8 +43,9 @@ subtree-push action; do not file PRs against it directly (see CONTRIBUTING).
 
 ```sh
 # 1. Install the verifier (no Rust toolchain needed — curl|sh ships a
-#    pre-built binary for darwin-aarch64 today; v0.1.0 GA fans out to
-#    linux-x86_64, darwin-x86_64, and windows-x86_64 with Sigstore.)
+#    pre-built, Sigstore-attested binary for linux-x86_64 and
+#    darwin-aarch64. Intel Mac and Windows build from source via
+#    `cargo install --git`.)
 curl --proto '=https' --tlsv1.2 -LsSf \
   https://releases.pegana.xyz/pegana-replay-installer.sh | sh
 
@@ -57,20 +58,24 @@ pegana-replay --alert-id 0190ab12-3456-7890-abcd-ef0123456789
 #    sha256 as a Solana SPL Memo via the ops wallet).
 pegana-replay --alert-id 0190ab12-3456-7890-abcd-ef0123456789 --verify-onchain
 
-# 4. (After v0.1.0 GA) verify the binary's provenance via the Sigstore
-#    attestation issued by this repo's CI.
+# 4. Verify the binary's provenance via the Sigstore attestation issued
+#    by this repo's CI (linux-x86_64 / darwin-aarch64 release binaries).
 gh attestation verify ~/.pegana/bin/pegana-replay \
   --owner lrafasouza --repo pegana-replay
 ```
 
 ## Versioning
 
-- `v*` tags fan out the full release matrix (4 OS/arch combos, all signed).
-- `methodology-v*` tags pin a specific methodology version (semver) — receipts
-  reference this exact tag in their `methodology_version` field. The
-  `/audit/<id>` page on the production site links back here at the matching
-  tag so anyone reading a 6-month-old receipt sees the methodology *as it
-  was at the time*, not as it is today.
+- The CLI's release tag **equals the methodology version it embeds**: `v0.2.0`
+  ships methodology 0.2.0. A receipt's `methodology_version` field maps
+  directly to a release tag, so anyone reading a 6-month-old receipt can check
+  out the matching tag and replay against the methodology *as it was at the
+  time*, not as it is today. The `/audit/<id>` page on the production site
+  links back here at the matching tag. (The CLI enforces this: a receipt whose
+  `methodology_version` differs from the running binary's exits `3`
+  VERSION_MISMATCH with an install hint for the right version.)
+- Each `v*` tag builds two Sigstore-attested targets — `x86_64-unknown-linux-gnu`
+  and `aarch64-apple-darwin`. Intel Mac and Windows build from source.
 
 ## License
 

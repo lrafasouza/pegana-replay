@@ -1,4 +1,4 @@
-# Pegana methodology — v0.1.0
+# Pegana methodology — v0.2.0
 
 How peg-risk signals are produced, why this design over the obvious
 alternatives, and what every load-bearing piece of the math is doing.
@@ -115,7 +115,7 @@ Thresholds are per-asset-class because a 50bps move is normal for
 |---|---|---|---|---|
 | stable_fiat (USDC, USDT, PYUSD…) | 15bps | 50bps | 200bps | `crates/methodology/src/thresholds.rs` |
 | stable_cdp (hyUSD) | 10bps | 30bps | 100bps | same |
-| lst (jitoSOL, dzSOL…) | 20bps | 80bps | 250bps | same |
+| lst (jitoSOL, dzSOL…)* | 20bps | 80bps | 250bps | same |
 | stable_yield (USDY, sUSD, syrupUSDC, sUSDe…) | discount-only* | 30bps | 100bps | same |
 | synth_lev (xSOL) | 100bps | 300bps | 1000bps | same |
 
@@ -123,10 +123,13 @@ Wider per-asset overrides live in `assets.toml` under each asset's
 `[assets.thresholds_bps]` or `[assets.thresholds_cr]` block. The
 methodology crate reads them; the engine doesn't.
 
-\* For yield-bearing stables only the *discount* side triggers — i.e.,
-`market < intrinsic`. A premium is just thin secondary liquidity and
-shouldn't burn a notification. See ADR comment on `Thresholds::Bps`
-for the rationale.
+\* For yield-bearing stables **and LSTs** only the *discount* side
+triggers — i.e., `market < intrinsic`. A premium (`market > intrinsic`)
+normalizes to `PEGGED`. For a yield-bearing stable a premium is thin
+secondary liquidity; for an LST it's demand pressure, not stress — the
+risk signal is the *discount* (redemption stress, cf. stETH −7% in 2022,
+ezETH's depeg). `is_direction_sensitive` covers both classes as of
+v0.2.0 (ADR-0021). Discount-side classification is unchanged.
 
 ### EWMA smoothing
 
@@ -139,14 +142,25 @@ transitions. Code: `crates/methodology/src/ewma.rs`.
 
 ### Hysteresis
 
-Asymmetric transitions — promoting an asset to a *worse* state
-(toward `BLACK_SWAN`) happens immediately when the EWMA crosses the
-threshold; *demoting* requires the EWMA to fall ≥30% below the
-threshold for ≥3 consecutive ticks. This prevents a flapping
-notification stream when the spread hovers right at the boundary.
+Two independent mechanisms keep the state stable when the EWMA hovers
+near a threshold.
 
-Code: `crates/methodology/src/transition.rs`. The constants
-(0.30 retreat margin, 3-tick floor) are checked by proptest in the
+**Time-hysteresis (asymmetric transitions).** Promoting an asset to a
+*worse* state (toward `BLACK_SWAN`) happens immediately when the EWMA
+crosses the threshold; *demoting* requires the EWMA to fall ≥30% below
+the threshold for ≥3 consecutive ticks.
+
+**Magnitude-hysteresis (Schmitt-trigger deadband, v0.2.0).** Time-
+hysteresis alone could not stop oscillation *at* the boundary, so
+v0.2.0 added `classify_with_hysteresis`: escalation still uses the
+normal threshold, but a relaxation toward a looser state only commits
+once the smoothed discount falls below `threshold × (1 − deadband_pct)`
+(engine default `deadband_pct = 25%`). Example: JupSOL flapped
+`DRIFT`↔`PEGGED` around 60 bps (84.7 → 48.8 bps); the deadband (exit at
+45 bps) holds the state through the dead zone. See ADR-0021.
+
+Code: `crates/methodology/src/transition.rs`. The constants (0.30 retreat
+margin, 3-tick floor, 25% deadband) are checked by proptest in the
 crate's test suite.
 
 ---
@@ -190,7 +204,8 @@ The CLI:
 1. Fetches `AlertEvidence` from `https://api.pegana.xyz/v1/audit/<UUID>`.
 2. Reads `methodology_version` from the receipt.
 3. Loads the matching version of `pegana-methodology` (this repo
-   pins by git tag — `methodology-v0.1.0`).
+   pins by git tag — the release tag equals the methodology version it
+   embeds, e.g. `v0.2.0` ships methodology 0.2.0).
 4. Re-runs the methodology against `inputs_frozen`.
 5. Compares the resulting computed values byte-for-byte against the
    receipt's `computed` block.
@@ -276,7 +291,7 @@ A few things this design explicitly does not do, with reasons:
 
 | Path | What it is |
 |---|---|
-| [`crates/methodology/`](crates/methodology) | Pure functions implementing this document. Versioned by semver, every release pinned to a `methodology-v*` git tag. |
+| [`crates/methodology/`](crates/methodology) | Pure functions implementing this document. Versioned by semver; the CLI release tag equals the methodology version it embeds (e.g. `v0.2.0`), so a receipt's `methodology_version` maps directly to a release tag. |
 | [`crates/pegana-replay-cli/`](crates/pegana-replay-cli) | The CLI binary that runs the methodology against a fetched receipt. |
 | [`crates/common-verify/`](crates/common-verify) | Config types + `AlertEvidence` schema returned by the API. |
 | [`assets.toml`](assets.toml) | Canonical asset list. Hashed into every receipt. |

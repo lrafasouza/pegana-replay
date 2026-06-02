@@ -2,11 +2,14 @@ name: Release
 
 # pegana-replay binary release pipeline (cargo-dist 0.30.0).
 #
-# Builds the four supported targets, attests each binary via the
-# GitHub-native Sigstore action (no key material — OIDC), uploads to a
-# GitHub Release. Triggers on `v*` AND `methodology-v*` so the CLI
-# always ships in lockstep with the methodology crate the CLI is
-# coupled to (exit-3 version-mismatch check in main.rs).
+# Builds the two supported targets (x86_64-unknown-linux-gnu + aarch64-
+# apple-darwin — Intel Mac and Windows are dropped, see Cargo.toml for
+# the rationale), attests each binary via the GitHub-native Sigstore
+# action (no key material — OIDC), uploads to a GitHub Release. Triggers
+# on `v*` AND `methodology-v*` so the CLI always ships in lockstep with
+# the methodology crate the CLI is coupled to (exit-3 version-mismatch
+# check in main.rs — the published CLI version equals the methodology
+# version it embeds).
 
 on:
   push:
