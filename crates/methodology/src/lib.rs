@@ -17,7 +17,8 @@ pub use discount::{compute_discount, is_plausible_discount_sample};
 pub use ewma::apply_ewma_pure;
 pub use receipt::{Computed, InputsFrozen, PythEntry, Receipt};
 pub use thresholds::{
-    is_direction_sensitive, state_for_bps_discount, state_for_bps_discount_aware, state_for_cr,
+    classify_with_hysteresis, is_direction_sensitive, state_for_bps_discount,
+    state_for_bps_discount_aware, state_for_cr,
 };
 pub use transition::{transition_decide, TransitionDecision};
 pub use version::{methodology_git_sha, methodology_version};
