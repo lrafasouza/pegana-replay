@@ -102,14 +102,20 @@ jobs:
           merge-multiple: true
           path: ./dist
 
-      - name: Install dist
-        run: |
-          curl --proto '=https' --tlsv1.2 -LsSf \
-            https://github.com/axodotdev/cargo-dist/releases/download/v0.30.0/cargo-dist-installer.sh | sh
-
-      - name: Upload to GitHub Release
+      - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
-          gh release upload "$TAG" ./dist/* --clobber
+          # `gh release upload` requires a pre-existing release; create it on
+          # first run, fall back to clobber-upload when re-running a tag whose
+          # release already exists. (The v0.1.0 release was hand-created, so
+          # this job had never actually run until v0.2.0.)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" ./dist/* --clobber
+          else
+            gh release create "$TAG" ./dist/* \
+              --title "$TAG" \
+              --generate-notes \
+              --verify-tag
+          fi
