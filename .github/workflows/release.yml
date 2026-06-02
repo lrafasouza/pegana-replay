@@ -111,10 +111,15 @@ jobs:
           # first run, fall back to clobber-upload when re-running a tag whose
           # release already exists. (The v0.1.0 release was hand-created, so
           # this job had never actually run until v0.2.0.)
+          # Upload only the archives + checksums. cargo-dist leaves the
+          # unpacked staging dir (pegana-replay-cli-<target>/) next to the
+          # .tar.xz in target/distrib/, so a bare ./dist/* glob would try to
+          # upload a directory and fail ("is a directory"). The two extension
+          # globs don't overlap: *.tar.xz excludes *.tar.xz.sha256.
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" ./dist/* --clobber
+            gh release upload "$TAG" ./dist/*.tar.xz ./dist/*.tar.xz.sha256 --clobber
           else
-            gh release create "$TAG" ./dist/* \
+            gh release create "$TAG" ./dist/*.tar.xz ./dist/*.tar.xz.sha256 \
               --title "$TAG" \
               --generate-notes \
               --verify-tag
