@@ -10,3 +10,10 @@ Cargo.lock.bak
 # IDE
 .vscode/
 .idea/
+
+# Internal docs are intentionally NOT mirrored to the public repo (ADRs,
+# including calibration-window notes). The sync workflow no longer whitelists
+# docs/adr; ignoring the whole docs/ tree here keeps a stray local commit from
+# republishing it to the public mirror.
+/docs/
+docs/
