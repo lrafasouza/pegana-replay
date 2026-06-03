@@ -170,6 +170,29 @@ pub fn state_for_cr(cr: Decimal, thresholds: &HashMap<String, u32>) -> PegState 
     }
 }
 
+/// The next-worse band below `current` for a CR-driven asset, as a display
+/// label + its CR threshold (percent). `None` if already at the worst band
+/// (BlackSwan) or not in an alerting band (Pegged/Unknown). Same dual-key
+/// tolerance as `state_for_cr` (assets.toml `depeg` / DB JSONB `cr_depeg`).
+pub fn next_worse_cr_band(
+    current: PegState,
+    thresholds: &HashMap<String, u32>,
+) -> Option<(&'static str, u32)> {
+    let get = |k: &str, alt: &str, d: u32| {
+        thresholds
+            .get(k)
+            .or_else(|| thresholds.get(alt))
+            .copied()
+            .unwrap_or(d)
+    };
+    match current {
+        PegState::Drift => Some(("DEPEG", get("depeg", "cr_depeg", 130))),
+        PegState::Depeg => Some(("CRITICAL", get("critical", "cr_critical", 110))),
+        PegState::Critical => Some(("BLACK_SWAN", get("black_swan", "cr_black_swan", 100))),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,6 +213,38 @@ mod tests {
         m.insert("cr_critical".into(), 110);
         m.insert("cr_black_swan".into(), 100);
         m
+    }
+
+    #[test]
+    fn next_worse_from_drift_is_depeg() {
+        let t = cr_thresholds(); // drift=150 depeg=130 critical=110 black_swan=100
+        assert_eq!(
+            next_worse_cr_band(PegState::Drift, &t),
+            Some(("DEPEG", 130))
+        );
+    }
+
+    #[test]
+    fn next_worse_from_depeg_is_critical() {
+        assert_eq!(
+            next_worse_cr_band(PegState::Depeg, &cr_thresholds()),
+            Some(("CRITICAL", 110))
+        );
+    }
+
+    #[test]
+    fn next_worse_from_critical_is_black_swan() {
+        assert_eq!(
+            next_worse_cr_band(PegState::Critical, &cr_thresholds()),
+            Some(("BLACK_SWAN", 100))
+        );
+    }
+
+    #[test]
+    fn next_worse_from_black_swan_or_pegged_is_none() {
+        let t = cr_thresholds();
+        assert_eq!(next_worse_cr_band(PegState::BlackSwan, &t), None);
+        assert_eq!(next_worse_cr_band(PegState::Pegged, &t), None);
     }
 
     #[test]
