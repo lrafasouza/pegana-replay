@@ -85,6 +85,44 @@ pub fn classify_with_hysteresis(
     state_for_bps_discount_aware(class, discount, &exit_thresholds)
 }
 
+/// Raise every band threshold by `deadband_pct` percent (integer, floored).
+/// The CR analog of `lower_thresholds`: for CR-driven assets a LOWER ratio is
+/// worse, so the Schmitt-trigger *exit* band sits ABOVE the entry thresholds.
+fn raise_thresholds(thresholds: &HashMap<String, u32>, deadband_pct: u32) -> HashMap<String, u32> {
+    thresholds
+        .iter()
+        .map(|(k, v)| (k.clone(), v.saturating_mul(100 + deadband_pct) / 100))
+        .collect()
+}
+
+/// CR magnitude-hysteresis (Schmitt-trigger) over `state_for_cr`. A CR-driven
+/// asset (hyUSD) whose collateral ratio sits a few points above its drift band
+/// flaps PEGGED↔DRIFT as oracle jitter clips the threshold. Time-hysteresis
+/// (engine `transition.rs` confirm_up/decay_down) debounces brief spikes but
+/// NOT sustained oscillation around the band. A deadband fixes it: escalate
+/// (CR dropping = worse) at the normal threshold, but only relax once CR rises
+/// above `threshold × (1 + deadband_pct%)`. `deadband_pct = 0` reduces to plain
+/// `state_for_cr`. Mirrors `classify_with_hysteresis` (spread) with the band
+/// inverted, since for CR lower = worse.
+pub fn classify_cr_with_hysteresis(
+    cr: Decimal,
+    thresholds: &HashMap<String, u32>,
+    current: PegState,
+    deadband_pct: u32,
+) -> PegState {
+    let raw = state_for_cr(cr, thresholds);
+    // Escalation (or no change): react at the normal threshold — never let the
+    // deadband slow down a worsening (dropping-CR) peg.
+    if rank(raw) >= rank(current) {
+        return raw;
+    }
+    // Relaxation (rising CR): only allow it once CR clears the deadband-raised
+    // (exit) thresholds, so a CR oscillating just above its band sticks instead
+    // of flapping back to PEGGED.
+    let exit_thresholds = raise_thresholds(thresholds, deadband_pct);
+    state_for_cr(cr, &exit_thresholds)
+}
+
 /// Convert smoothed discount → state using BPS thresholds.
 /// `discount` is `1 - market/intrinsic`. |discount| is what matters for
 /// symmetric classes (LST, fiat, dn, fx, synth_lev). For yield-bearing
@@ -213,6 +251,56 @@ mod tests {
         m.insert("cr_critical".into(), 110);
         m.insert("cr_black_swan".into(), 100);
         m
+    }
+
+    #[test]
+    fn cr_hysteresis_escalates_immediately() {
+        let t = cr_thresholds(); // drift=150
+                                 // CR dropping below drift fires DRIFT at once, even with a deadband.
+        assert_eq!(
+            classify_cr_with_hysteresis(
+                Decimal::from_str("1.49").unwrap(),
+                &t,
+                PegState::Pegged,
+                2
+            ),
+            PegState::Drift
+        );
+        // A deeper drop escalates straight to DEPEG — never slow a worsening peg.
+        assert_eq!(
+            classify_cr_with_hysteresis(Decimal::from_str("1.29").unwrap(), &t, PegState::Drift, 2),
+            PegState::Depeg
+        );
+    }
+
+    #[test]
+    fn cr_hysteresis_holds_inside_the_deadband() {
+        let t = cr_thresholds(); // drift=150; 2% exit band = 153
+                                 // CR recovered above drift (151 >= 150) but not above the 153 exit band:
+                                 // stay DRIFT instead of flapping back to PEGGED.
+        assert_eq!(
+            classify_cr_with_hysteresis(Decimal::from_str("1.51").unwrap(), &t, PegState::Drift, 2),
+            PegState::Drift
+        );
+    }
+
+    #[test]
+    fn cr_hysteresis_relaxes_once_cr_clears_the_band() {
+        let t = cr_thresholds(); // 2% exit band = 153
+        assert_eq!(
+            classify_cr_with_hysteresis(Decimal::from_str("1.53").unwrap(), &t, PegState::Drift, 2),
+            PegState::Pegged
+        );
+    }
+
+    #[test]
+    fn cr_hysteresis_zero_deadband_is_plain_state_for_cr() {
+        let t = cr_thresholds();
+        // deadband_pct = 0 → relaxes at the bare threshold (151 >= 150 → PEGGED).
+        assert_eq!(
+            classify_cr_with_hysteresis(Decimal::from_str("1.51").unwrap(), &t, PegState::Drift, 0),
+            PegState::Pegged
+        );
     }
 
     #[test]
