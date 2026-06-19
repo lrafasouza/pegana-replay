@@ -95,6 +95,227 @@ fn state_strictness(s: PegState) -> u8 {
 mod tests {
     use super::*;
     use chrono::Duration;
+    use proptest::prelude::*;
+
+    // ── Proptest helpers ──────────────────────────────────────────────────────
+
+    /// All PegState variants for strategy composition.
+    fn arb_peg_state() -> impl Strategy<Value = PegState> {
+        prop_oneof![
+            Just(PegState::Pegged),
+            Just(PegState::Drift),
+            Just(PegState::Depeg),
+            Just(PegState::Critical),
+            Just(PegState::BlackSwan),
+            Just(PegState::Unknown),
+        ]
+    }
+
+    /// Produce a DateTime<Utc> anchored to a fixed epoch plus an offset in
+    /// `[0, range_secs)`.  Using a fixed epoch makes test output reproducible
+    /// across time zones and DST changes.
+    fn base_epoch() -> DateTime<Utc> {
+        // 2024-01-01T00:00:00Z — arbitrary but stable.
+        DateTime::from_timestamp(1_704_067_200, 0).unwrap()
+    }
+
+    proptest! {
+        /// DETERMINISM: identical inputs must produce identical outputs.
+        #[test]
+        fn determinism(
+            current in arb_peg_state(),
+            candidate in arb_peg_state(),
+            has_prev_candidate in any::<bool>(),
+            prev_state_idx in 0usize..6,
+            since_offset in 0i64..=3600,
+            now_offset  in 0i64..=3600,
+            confirm_up  in 1i64..=600,
+            decay_down  in 1i64..=600,
+        ) {
+            let epoch = base_epoch();
+            let now   = epoch + Duration::seconds(now_offset);
+
+            let (prev_candidate_state, prev_candidate_since) = if has_prev_candidate {
+                let states = [
+                    PegState::Pegged, PegState::Drift, PegState::Depeg,
+                    PegState::Critical, PegState::BlackSwan, PegState::Unknown,
+                ];
+                // candidate_since must be <= now (monotonic-time invariant)
+                let since = epoch + Duration::seconds(since_offset.min(now_offset));
+                (Some(states[prev_state_idx % 6]), Some(since))
+            } else {
+                (None, None)
+            };
+
+            let r1 = transition_decide(
+                current, candidate, prev_candidate_state, prev_candidate_since,
+                now, confirm_up, decay_down,
+            );
+            let r2 = transition_decide(
+                current, candidate, prev_candidate_state, prev_candidate_since,
+                now, confirm_up, decay_down,
+            );
+            prop_assert_eq!(r1, r2, "same inputs must produce the same output");
+        }
+
+        /// NO-SPONTANEOUS-ESCALATION: a brand-new candidate (timer just
+        /// started) must never immediately commit into a stricter state.
+        /// This only applies when a different candidate is presented (no prior
+        /// matching candidate), so the FSM is in the "timer reset" path.
+        #[test]
+        fn no_spontaneous_escalation_on_timer_reset(
+            current in arb_peg_state(),
+            candidate in arb_peg_state(),
+            now_offset in 0i64..=3600,
+            confirm_up in 1i64..=600,
+            decay_down in 1i64..=600,
+        ) {
+            // Present a candidate with no prior matching tracked state —
+            // the FSM must NOT commit a stricter state immediately.
+            let now = base_epoch() + Duration::seconds(now_offset);
+
+            let r = transition_decide(
+                current,
+                candidate,
+                // no prior candidate at all — forces Case 2 (timer reset)
+                None,
+                None,
+                now,
+                confirm_up,
+                decay_down,
+            );
+
+            // If the candidate matches current, it's a no-op (Case 1) and
+            // new_last_state = current regardless, which is fine.
+            if candidate == current {
+                prop_assert_eq!(r.new_last_state, current);
+            } else {
+                // Case 2: timer just started.  The committed state must NOT
+                // escalate immediately beyond current.
+                let escalated = state_strictness(r.new_last_state)
+                    > state_strictness(current);
+                prop_assert!(
+                    !escalated,
+                    "spontaneous escalation: current={:?} candidate={:?} → new_last_state={:?}",
+                    current, candidate, r.new_last_state
+                );
+                // The candidate must be recorded.
+                prop_assert_eq!(r.new_candidate_state, Some(candidate));
+            }
+        }
+
+        /// NO-ESCALATION-BEFORE-CONFIRM-WINDOW: when the same candidate has
+        /// been tracked but the elapsed time is strictly less than confirm_up,
+        /// the committed state must not move to a stricter level.
+        #[test]
+        fn no_escalation_before_window(
+            current in arb_peg_state(),
+            candidate in arb_peg_state(),
+            confirm_up in 2i64..=600,
+            decay_down in 1i64..=600,
+            // elapsed in [0, confirm_up - 1]
+            elapsed in 0i64..=598,
+        ) {
+            // Ensure candidate is strictly more severe than current so we are
+            // on the escalation path; skip when they are equal or candidate is
+            // looser (those are covered by different invariants).
+            prop_assume!(state_strictness(candidate) > state_strictness(current));
+            // Clamp elapsed to [0, confirm_up - 1].
+            let elapsed = elapsed % confirm_up; // always < confirm_up
+
+            let epoch = base_epoch();
+            let since = epoch;
+            let now   = epoch + Duration::seconds(elapsed);
+
+            let r = transition_decide(
+                current,
+                candidate,
+                Some(candidate), // same candidate being tracked
+                Some(since),
+                now,
+                confirm_up,
+                decay_down,
+            );
+
+            prop_assert_eq!(
+                r.new_last_state, current,
+                "must NOT commit {:?} before confirm_up ({} secs); elapsed={}",
+                candidate, confirm_up, elapsed
+            );
+        }
+
+        /// ESCALATION-COMPLETES-AFTER-WINDOW: when elapsed >= confirm_up the
+        /// strict candidate must be committed.
+        #[test]
+        fn escalation_completes_after_window(
+            current in arb_peg_state(),
+            candidate in arb_peg_state(),
+            confirm_up in 1i64..=600,
+            decay_down in 1i64..=600,
+            // elapsed in [confirm_up, confirm_up + 3600]
+            extra in 0i64..=3600,
+        ) {
+            prop_assume!(state_strictness(candidate) > state_strictness(current));
+
+            let epoch = base_epoch();
+            let since = epoch;
+            let elapsed = confirm_up + extra; // always >= confirm_up
+            let now = epoch + Duration::seconds(elapsed);
+
+            let r = transition_decide(
+                current,
+                candidate,
+                Some(candidate),
+                Some(since),
+                now,
+                confirm_up,
+                decay_down,
+            );
+
+            prop_assert_eq!(
+                r.new_last_state, candidate,
+                "must commit {:?} once elapsed ({}) >= confirm_up ({})",
+                candidate, elapsed, confirm_up
+            );
+        }
+
+        /// MONOTONIC-TIME INVARIANT: candidate_since must be <= now.
+        /// The FSM should never receive a future since; this property ensures
+        /// the code handles the degenerate case gracefully (no panic, just
+        /// keeps the current state).
+        #[test]
+        fn candidate_since_not_in_future_for_maturation(
+            current in arb_peg_state(),
+            candidate in arb_peg_state(),
+            confirm_up in 1i64..=600,
+            decay_down in 1i64..=600,
+            // since > now: elapsed will be negative → must not commit
+            extra in 1i64..=3600,
+        ) {
+            prop_assume!(state_strictness(candidate) > state_strictness(current));
+
+            let epoch = base_epoch();
+            let now   = epoch;
+            // since is in the FUTURE relative to now
+            let since = epoch + Duration::seconds(extra);
+
+            let r = transition_decide(
+                current,
+                candidate,
+                Some(candidate),
+                Some(since),
+                now,
+                confirm_up,
+                decay_down,
+            );
+
+            // elapsed is negative → num_seconds() < needed → must NOT commit.
+            prop_assert_eq!(
+                r.new_last_state, current,
+                "future candidate_since must not trigger maturation"
+            );
+        }
+    }
 
     fn t0() -> DateTime<Utc> {
         Utc::now()

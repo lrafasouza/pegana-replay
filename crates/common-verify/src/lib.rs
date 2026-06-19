@@ -43,6 +43,90 @@ pub enum AssetClass {
     StableYield,
 }
 
+impl AssetClass {
+    /// Map each asset class to its consumer-facing peg anchor.
+    ///
+    /// Three anchors describe how to interpret fair value without knowledge of
+    /// Pegana's internal taxonomy:
+    ///
+    /// - `"USD"` — fixed $1 target.  The discount from $1 IS the risk signal.
+    ///   Reserve-backed, CDP, delta-neutral, and RWA stablecoins all peg to
+    ///   exactly $1 regardless of the underlying collateral mechanism.
+    ///
+    /// - `"FX"` — fixed foreign-exchange peg to a non-USD fiat currency
+    ///   (e.g. EURC→EUR, BRZ→BRL).  The target is a fixed exchange rate, not
+    ///   $1.  Consumers should read `peg_target` to learn WHICH currency.
+    ///   A discount from the FX rate IS the risk signal.
+    ///
+    /// - `"NAV"` — intrinsic redemption / net-asset value.  Fair value is NOT
+    ///   a fixed fiat rate: it moves as staking rewards accrue (LSTs) or the
+    ///   yield wrapper compounds (stable_yield), or varies with protocol
+    ///   leverage (synth_lev).  The discount is relative to NAV, and NAV
+    ///   itself moves.
+    ///
+    /// EXHAUSTIVE — no wildcard arm.  Adding a 9th variant to `AssetClass`
+    /// without extending this method produces a compile error, which is the
+    /// point.  The "unknown class → NAV" conservative fallback lives ONLY at
+    /// the API-rs string-parse boundary (`anchor_for_class`), not here.
+    pub fn anchor(&self) -> &'static str {
+        match self {
+            // ── USD-anchored (fixed $1 target) ─────────────────────────────
+            //
+            // StableFiat: reserve-backed $1 stables (USDC, USDT, PYUSD).
+            AssetClass::StableFiat => "USD",
+            //
+            // StableCdp: collateral-debt-position stables (USDS/MakerDAO,
+            //   hyUSD/Hylo).  Collateral backs a $1 peg; thresholds are
+            //   CR-based but the TARGET is still a fixed $1 redemption value.
+            AssetClass::StableCdp => "USD",
+            //
+            // StableRwa: real-world-asset-backed $1 stables.  Fixed NAV via
+            //   redemption against the backing asset at a $1-equivalent rate.
+            AssetClass::StableRwa => "USD",
+            //
+            // StableDn: delta-neutral synthetic stables (USDe/Ethena, JupUSD).
+            //   Hold $1 via delta hedging, NOT via yield accrual.
+            AssetClass::StableDn => "USD",
+
+            // ── FX-anchored (fixed non-USD fiat peg) ───────────────────────
+            //
+            // StableFx: FX-rate-pegged stables (BRZ→BRL, EURC→EUR).  The
+            //   target is a fixed exchange rate.  Consumers read `peg_target`
+            //   (BRL / EUR / …) to learn which currency.
+            AssetClass::StableFx => "FX",
+
+            // ── NAV-anchored (intrinsic redemption / net-asset value) ───────
+            //
+            // Lst: liquid-staking tokens (jitoSOL, mSOL, bSOL, …).  Fair
+            //   value is stake-pool sol_per_lst × SOL/USD — NOT a fixed rate.
+            AssetClass::Lst => "NAV",
+            //
+            // StableYield: yield-bearing wrappers (sHYUSD, USDY, sUSDe,
+            //   syrupUSDC, sUSD/Solayer, ONyc, pbUSDC).  Intrinsic NAV starts
+            //   at $1 and GROWS over time; a market price below NAV is the
+            //   risk signal.
+            AssetClass::StableYield => "NAV",
+            //
+            // SynthLev: synthetic leverage tokens (xSOL/Hylo).  Intrinsic is
+            //   a variable-leverage NAV driven by the protocol reserve.
+            AssetClass::SynthLev => "NAV",
+        }
+    }
+
+    /// Parse the snake_case DB string into `AssetClass`, matching the
+    /// `#[serde(rename_all = "snake_case")]` annotation.
+    ///
+    /// Returns `None` for any string that is not a known variant.  In
+    /// practice this should never happen (the Postgres `asset_class` enum is
+    /// migrated in lockstep), but callers may handle unknown future variants
+    /// gracefully at a parse boundary rather than crashing.
+    pub fn from_db_str(s: &str) -> Option<Self> {
+        // Reuse the existing serde rename_all="snake_case" round-trip rather
+        // than a second hand-maintained match.
+        serde_json::from_value(serde_json::Value::String(s.to_owned())).ok()
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum PegTarget {
     SOL,
@@ -309,6 +393,54 @@ pub struct AlertEvidence {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// AssetClass::anchor() must be exhaustive over all 8 variants and must
+    /// emit the correct three-way anchor value for each.
+    /// C1 (2026-06-18): the mapping now lives here so adding a 9th variant
+    /// without extending this method produces a compile error in anchor().
+    #[test]
+    fn asset_class_anchor_exhaustive() {
+        // USD-anchored — fixed $1 target.
+        assert_eq!(AssetClass::StableFiat.anchor(), "USD", "StableFiat");
+        assert_eq!(AssetClass::StableCdp.anchor(), "USD", "StableCdp");
+        assert_eq!(AssetClass::StableRwa.anchor(), "USD", "StableRwa");
+        assert_eq!(AssetClass::StableDn.anchor(), "USD", "StableDn");
+
+        // FX-anchored — fixed non-USD fiat peg.
+        // C2: StableFx must be "FX", not "USD".
+        assert_eq!(AssetClass::StableFx.anchor(), "FX", "StableFx");
+
+        // NAV-anchored — intrinsic redemption/net-asset value.
+        assert_eq!(AssetClass::Lst.anchor(), "NAV", "Lst");
+        assert_eq!(AssetClass::StableYield.anchor(), "NAV", "StableYield");
+        assert_eq!(AssetClass::SynthLev.anchor(), "NAV", "SynthLev");
+    }
+
+    /// AssetClass::from_db_str round-trips every snake_case DB string.
+    #[test]
+    fn asset_class_from_db_str_round_trips() {
+        let cases = [
+            ("lst", AssetClass::Lst),
+            ("stable_fiat", AssetClass::StableFiat),
+            ("stable_cdp", AssetClass::StableCdp),
+            ("stable_rwa", AssetClass::StableRwa),
+            ("stable_dn", AssetClass::StableDn),
+            ("stable_fx", AssetClass::StableFx),
+            ("synth_lev", AssetClass::SynthLev),
+            ("stable_yield", AssetClass::StableYield),
+        ];
+        for (s, expected) in &cases {
+            assert_eq!(
+                AssetClass::from_db_str(s),
+                Some(*expected),
+                "from_db_str({s:?})"
+            );
+        }
+        // Unknown strings must return None, not panic.
+        assert_eq!(AssetClass::from_db_str("unknown_future_class"), None);
+        assert_eq!(AssetClass::from_db_str(""), None);
+        assert_eq!(AssetClass::from_db_str("STABLE_FIAT"), None, "wrong case");
+    }
 
     /// Sanity check: assets.toml parses cleanly into the public type tree
     /// and contains at least the post-Phase-0 required symbol set. This

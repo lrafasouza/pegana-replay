@@ -18,7 +18,8 @@ pub use ewma::apply_ewma_pure;
 pub use receipt::{Computed, InputsFrozen, PythEntry, Receipt};
 pub use thresholds::{
     classify_cr_with_hysteresis, classify_with_hysteresis, is_direction_sensitive,
-    next_worse_cr_band, state_for_bps_discount, state_for_bps_discount_aware, state_for_cr,
+    next_worse_cr_band, premium_sanity_violated, state_for_bps_discount,
+    state_for_bps_discount_aware, state_for_cr, NAV_PREMIUM_SANITY_BPS,
 };
 pub use transition::{transition_decide, TransitionDecision};
 pub use version::{methodology_git_sha, methodology_version};

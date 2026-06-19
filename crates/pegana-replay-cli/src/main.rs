@@ -21,6 +21,27 @@ use pegana_methodology::{
 use std::path::PathBuf;
 use uuid::Uuid;
 
+/// The set of accepted Pegana ops/commit wallet addresses.
+///
+/// This allowlist is what makes the on-chain check trustless: the verifier
+/// independently pins the accepted signers at compile time.  Without this pin,
+/// anyone could post an identical memo from any wallet — since the receipt sha256
+/// is public — and the verifier would accept it.  Pinning the signers here means
+/// only an actual Pegana commit wallet produces a valid on-chain attestation,
+/// regardless of what tx_sig the API returns.
+///
+/// # Rotation model
+///
+/// When the ops wallet rotates, ADD the new key to this array — keep the old key
+/// in place.  Both old and new remain valid forever so that historical receipts
+/// signed by the previous wallet continue to verify correctly.  This MUST remain
+/// a compile-time pin (no runtime env-var or flag override); removing that
+/// guarantee would allow an attacker to inject an arbitrary signer at runtime and
+/// break the trustless property.  A rotation is shipped as a source edit that
+/// produces a new CLI release; users who build from source get the update by
+/// pulling and rebuilding.
+const PEGANA_COMMIT_SIGNERS: &[&str] = &["7PpoyumFQMmcWzhJxDYr6iPv1fjYN41KBTA8xKKzu7R9"];
+
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Cli {
@@ -53,8 +74,30 @@ struct Cli {
     quiet: bool,
 }
 
+/// Check that the fee-payer / first account key of the transaction is in the
+/// compile-time signer allowlist.
+///
+/// `pubkey`    — the `pubkey` field of `account_keys[0]` in the parsed tx.
+/// `is_signer` — the `signer` field of the same entry (must be true for the
+///               fee-payer; defensive check).
+/// `allowed`   — the slice of accepted wallet addresses (PEGANA_COMMIT_SIGNERS).
+///
+/// Returns `true` only when BOTH conditions hold: the address is in the
+/// allowlist AND the entry is flagged as a signer.  This is a pure function
+/// with no I/O so it can be unit-tested without a real RPC call.
+fn onchain_signer_ok(pubkey: &str, is_signer: bool, allowed: &[&str]) -> bool {
+    is_signer && allowed.contains(&pubkey)
+}
+
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() {
+    if let Err(e) = run().await {
+        eprintln!("ERROR  {e:#}");
+        std::process::exit(2);
+    }
+}
+
+async fn run() -> Result<()> {
     let cli = Cli::parse();
 
     let receipt: Receipt = match (&cli.alert_id, &cli.bundle) {
@@ -111,7 +154,8 @@ fn verify(receipt: &Receipt, quiet: bool) -> Result<()> {
             receipt.methodology_version, cli_version
         );
         eprintln!(
-            "Install the matching version:\n  cargo install pegana-replay-cli --version {}",
+            "Install the matching version:\n  curl --proto '=https' --tlsv1.2 -LsSf \
+             https://releases.pegana.xyz/install.sh | PEGANA_REPLAY_VERSION=v{} sh",
             receipt.methodology_version
         );
         std::process::exit(3);
@@ -234,15 +278,74 @@ async fn verify_onchain(
         }
     }
 
-    let mut memo_payloads: Vec<String> = Vec::new();
-    if let EncodedTransaction::Json(ui_tx) = &tx.transaction.transaction {
-        if let UiMessage::Parsed(parsed) = &ui_tx.message {
-            for ix in &parsed.instructions {
-                collect_memo(ix, &mut memo_payloads);
+    // 4b) HARD GATE: we can only verify the signer from a Json + Parsed message.
+    //     Any other encoding means we cannot determine the signer → fail safe.
+    //
+    //     SECURITY INVARIANT: no memo (top-level OR inner-instruction) is
+    //     collected unless the signer was verified first.  The inner-instruction
+    //     scan must live INSIDE this gate, not after it, because `meta` is a
+    //     sibling field present for ANY encoding — an attacker-controlled RPC
+    //     could return a non-Json encoding (Binary/LegacyBinary/Accounts) so the
+    //     `if let Json` does not match and the signer check is skipped, while the
+    //     inner scan would still collect a forged memo and pass exit 0.
+    let parsed = match &tx.transaction.transaction {
+        EncodedTransaction::Json(ui_tx) => match &ui_tx.message {
+            UiMessage::Parsed(parsed) => parsed,
+            _ => {
+                // Non-Parsed message (Raw/Legacy): cannot determine fee-payer identity.
+                // Fail safe: treating an unverifiable signer as a mismatch is
+                // the only trustless interpretation.
+                eprintln!(
+                    "FAIL  on-chain tx {} returned a non-Parsed message encoding — \
+                     cannot verify the commit signer (fail-safe exit).",
+                    tx_sig_str
+                );
+                eprintln!("Solscan: https://solscan.io/tx/{}", tx_sig_str);
+                std::process::exit(4);
             }
+        },
+        _ => {
+            // Non-Json encoding (Binary/LegacyBinary/Accounts): cannot determine signer.
+            eprintln!(
+                "FAIL  on-chain tx {} returned a non-Json encoding — \
+                 cannot verify the commit signer (fail-safe exit).",
+                tx_sig_str
+            );
+            eprintln!("Solscan: https://solscan.io/tx/{}", tx_sig_str);
+            std::process::exit(4);
         }
-    }
+    };
 
+    // Verify the fee-payer (account_keys[0]) is in the PEGANA_COMMIT_SIGNERS allowlist.
+    let fee_payer_pubkey = match parsed.account_keys.first() {
+        None => {
+            eprintln!(
+                "FAIL  on-chain tx {} has no account_keys — cannot verify signer",
+                tx_sig_str
+            );
+            eprintln!("Solscan: https://solscan.io/tx/{}", tx_sig_str);
+            std::process::exit(4);
+        }
+        Some(fee_payer) => {
+            if !onchain_signer_ok(&fee_payer.pubkey, fee_payer.signer, PEGANA_COMMIT_SIGNERS) {
+                eprintln!(
+                    "FAIL  on-chain tx {} was NOT signed by an accepted Pegana commit wallet.",
+                    tx_sig_str
+                );
+                eprintln!("  observed signer : {}", fee_payer.pubkey);
+                eprintln!("  accepted signers : {:?}", PEGANA_COMMIT_SIGNERS);
+                eprintln!("Solscan: https://solscan.io/tx/{}", tx_sig_str);
+                std::process::exit(4);
+            }
+            fee_payer.pubkey.clone()
+        }
+    };
+
+    // ONLY NOW — signer verified — collect memos (top-level AND inner-instructions).
+    let mut memo_payloads: Vec<String> = Vec::new();
+    for ix in &parsed.instructions {
+        collect_memo(ix, &mut memo_payloads);
+    }
     // Also scan inner instructions (CPI calls). `meta.inner_instructions` is
     // an OptionSerializer<Vec<UiInnerInstructions>> wrapper; flatten via
     // Option::from so we drop both `None` and `Skip` cleanly.
@@ -265,10 +368,15 @@ async fn verify_onchain(
     }
 
     // 5) Memo format from engine onchain_commit.rs: "pegana-v1|<version>|<alert_id>|<receipt_sha256>"
-    //    Find a memo whose payload contains the receipt's expected_receipt_sha256.
+    //    Parse the `|`-delimited fields and require:
+    //      field[0] == "pegana-v1"    (scheme guard)
+    //      field[last] == expected_sha  (exact match, no substring false-positive)
+    //    Middle fields (<version>, <alert_id>) are accepted leniently.
     let expected_sha = &receipt.expected_receipt_sha256;
     let matched = memo_payloads.iter().any(|payload| {
-        payload.starts_with("pegana-v1|") && payload.contains(expected_sha.as_str())
+        let parts: Vec<&str> = payload.splitn(4, '|').collect();
+        parts.first().copied() == Some("pegana-v1")
+            && parts.last().copied() == Some(expected_sha.as_str())
     });
 
     if !matched {
@@ -291,7 +399,95 @@ async fn verify_onchain(
             tx_sig_str,
             &expected_sha[..12]
         );
+        println!("      on-chain signer confirmed: {}", fee_payer_pubkey);
         println!("      explorer: https://solscan.io/tx/{}", tx_sig_str);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::onchain_signer_ok;
+
+    const SIGNER: &str = "7PpoyumFQMmcWzhJxDYr6iPv1fjYN41KBTA8xKKzu7R9";
+    const OTHER_SIGNER: &str = "So11111111111111111111111111111111111111112";
+    // Simulates a future allowlist with two keys (old + rotated-in).
+    const TWO_SIGNERS: &[&str] = &[SIGNER, OTHER_SIGNER];
+
+    #[test]
+    fn onchain_signer_ok_key_in_allowlist_returns_true() {
+        // Primary signer present in a single-entry allowlist.
+        assert!(onchain_signer_ok(SIGNER, true, &[SIGNER]));
+    }
+
+    #[test]
+    fn onchain_signer_ok_key_not_in_allowlist_returns_false() {
+        // A key that is NOT in the allowlist must be rejected even if is_signer=true.
+        let intruder = "11111111111111111111111111111111";
+        assert!(!onchain_signer_ok(intruder, true, &[SIGNER]));
+    }
+
+    #[test]
+    fn onchain_signer_ok_signer_flag_false_returns_false() {
+        // Even if the pubkey is in the allowlist, signer=false must fail.
+        assert!(!onchain_signer_ok(SIGNER, false, &[SIGNER]));
+    }
+
+    #[test]
+    fn onchain_signer_ok_second_key_in_two_entry_allowlist_returns_true() {
+        // After a rotation the NEW key must also pass against the extended allowlist.
+        assert!(onchain_signer_ok(OTHER_SIGNER, true, TWO_SIGNERS));
+    }
+
+    #[test]
+    fn onchain_signer_ok_old_key_in_two_entry_allowlist_still_true() {
+        // The OLD key must still pass so historical receipts keep verifying.
+        assert!(onchain_signer_ok(SIGNER, true, TWO_SIGNERS));
+    }
+
+    // ── memo match logic (mirrors the closure in verify_onchain) ─────────────
+
+    fn memo_matches(payload: &str, expected_sha: &str) -> bool {
+        let parts: Vec<&str> = payload.splitn(4, '|').collect();
+        parts.first().copied() == Some("pegana-v1") && parts.last().copied() == Some(expected_sha)
+    }
+
+    const SHA: &str = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
+
+    #[test]
+    fn memo_match_well_formed_passes() {
+        let memo = format!("pegana-v1|0.4.0|550e8400-e29b-41d4-a716-446655440000|{SHA}");
+        assert!(memo_matches(&memo, SHA));
+    }
+
+    #[test]
+    fn memo_match_wrong_scheme_fails() {
+        // Changed scheme prefix must be rejected.
+        let memo = format!("pegana-v2|0.4.0|550e8400-e29b-41d4-a716-446655440000|{SHA}");
+        assert!(!memo_matches(&memo, SHA));
+    }
+
+    #[test]
+    fn memo_match_wrong_sha_fails() {
+        let other_sha = "0000000000000000000000000000000000000000000000000000000000000000";
+        let memo = format!("pegana-v1|0.4.0|550e8400-e29b-41d4-a716-446655440000|{SHA}");
+        assert!(!memo_matches(&memo, other_sha));
+    }
+
+    #[test]
+    fn memo_match_sha_as_substring_is_rejected() {
+        // The old `contains()` check would accept a memo whose last field is
+        // "prefix_<sha>_suffix" as long as <sha> appeared anywhere.  The new
+        // exact-last-field check must reject this.
+        let memo =
+            format!("pegana-v1|0.4.0|550e8400-e29b-41d4-a716-446655440000|prefix_{SHA}_extra");
+        assert!(!memo_matches(&memo, SHA));
+    }
+
+    #[test]
+    fn memo_match_middle_fields_lenient() {
+        // Different version / alert_id values should still pass.
+        let memo = format!("pegana-v1|9.9.9|ffffffff-ffff-ffff-ffff-ffffffffffff|{SHA}");
+        assert!(memo_matches(&memo, SHA));
+    }
 }

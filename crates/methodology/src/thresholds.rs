@@ -18,6 +18,42 @@ pub fn is_direction_sensitive(class: AssetClass) -> bool {
     matches!(class, AssetClass::StableYield | AssetClass::Lst)
 }
 
+/// Maximum plausible PREMIUM (market above NAV/intrinsic — a *negative*
+/// discount) for a direction-sensitive class before the intrinsic itself is
+/// judged broken rather than the market merely bidding the asset up.
+///
+/// Direction-sensitive classes (LST, stable_yield) normalize *any* premium to
+/// PEGGED (ADR-0021): a premium is demand pressure, not redemption stress, and
+/// holders can always redeem at intrinsic. Correct for a real premium — but it
+/// also silently masks a BROKEN INTRINSIC. If the NAV/redemption feed reads far
+/// too low, the market sits far "above" it and the asset publishes a confident
+/// PEGGED off a garbage anchor (sHYUSD: market ≈ +30% over a thin-Jupiter NAV
+/// print, yet PEGGED — the validation "formula caveat"). No real LST/yield
+/// premium approaches this: arbitrage caps live premiums in the low hundreds of
+/// bps (INF ≈160 bps is the widest observed across the 26 assets). So a premium
+/// beyond this bound is an intrinsic-quality failure, and the honest output is
+/// UNKNOWN (bad anchor), not PEGGED.
+///
+/// 1000 bps (10%) leaves a >6× margin over the widest legitimate premium while
+/// still catching the sHYUSD-class masking. This is NOT the discount-constancy
+/// freeze detector rejected in ADR-0024 (no magnitude threshold there could
+/// separate flat-healthy from frozen) — it is a magnitude check on a single
+/// sample, zero-false-positive against every observed legitimate premium.
+pub const NAV_PREMIUM_SANITY_BPS: u32 = 1000;
+
+/// True when `discount` is a premium (negative) on a direction-sensitive class
+/// whose magnitude exceeds [`NAV_PREMIUM_SANITY_BPS`] — i.e. the intrinsic is
+/// almost certainly broken and the otherwise-masked PEGGED must become UNKNOWN.
+/// The discount (positive) side and symmetric classes return false: a real
+/// market-below-NAV move is classified by the normal bands, never laundered
+/// into UNKNOWN.
+pub fn premium_sanity_violated(class: AssetClass, discount: Decimal) -> bool {
+    if !(is_direction_sensitive(class) && discount < Decimal::ZERO) {
+        return false;
+    }
+    discount.abs() * Decimal::from(10_000u32) > Decimal::from(NAV_PREMIUM_SANITY_BPS)
+}
+
 /// Direction-aware variant of `state_for_bps_discount`. For classes where
 /// only one side of the spread carries information (currently just
 /// `stable_yield`), a premium (negative discount) is normalized to PEGGED.
@@ -155,8 +191,25 @@ pub fn state_for_bps_discount(discount: Decimal, thresholds: &HashMap<String, u3
         .or_else(|| thresholds.get("critical_bps"))
         .copied()
         .unwrap_or(300);
+    // BLACK_SWAN on the spread path (methodology 0.4.0). A discount beyond any
+    // normal band — default = 2× critical, overridable via `black_swan` /
+    // `black_swan_bps`. This makes the publicly-advertised 5th state reachable
+    // from spread (a USDC 4%+ break, a UST-style CRITICAL→BLACK_SWAN cascade),
+    // not only from the CR path (hyUSD) — closing the validation "Four/Five
+    // states" honesty gap. It re-labels only the most extreme moves (already
+    // CRITICAL today); nothing at or below critical changes. NOTE: it auto-exits
+    // via the normal hysteresis like every other band — the engine does NOT
+    // enforce the "never auto-exits / operator-reset" terminal behaviour the
+    // marketing copy used to imply (there is no reset path to make that safe);
+    // see ADR-0025. The CR-path black_swan (hyUSD) already behaved this way.
+    let black_swan = thresholds
+        .get("black_swan")
+        .or_else(|| thresholds.get("black_swan_bps"))
+        .copied()
+        .unwrap_or_else(|| critical.saturating_mul(2));
 
     match abs_bps {
+        n if n >= black_swan => PegState::BlackSwan,
         n if n >= critical => PegState::Critical,
         n if n >= depeg => PegState::Depeg,
         n if n >= drift => PegState::Drift,
@@ -234,6 +287,7 @@ pub fn next_worse_cr_band(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
     use std::str::FromStr;
 
     fn bps_thresholds() -> HashMap<String, u32> {
@@ -364,6 +418,39 @@ mod tests {
         assert_eq!(
             state_for_bps_discount(Decimal::from_str("-0.0350").unwrap(), &bps_thresholds()),
             PegState::Critical
+        );
+    }
+
+    // BLACK_SWAN spread band (methodology 0.4.0): default 2× critical, reachable
+    // from spread. critical=300 → default black_swan=600.
+    #[test]
+    fn bps_black_swan_default_is_two_times_critical() {
+        // 650 bps ≥ 600 (2×300) → BLACK_SWAN.
+        assert_eq!(
+            state_for_bps_discount(Decimal::from_str("0.0650").unwrap(), &bps_thresholds()),
+            PegState::BlackSwan
+        );
+        // 500 bps: ≥ critical(300) but < black_swan(600) → still CRITICAL
+        // (nothing at/below the old top band changes).
+        assert_eq!(
+            state_for_bps_discount(Decimal::from_str("0.0500").unwrap(), &bps_thresholds()),
+            PegState::Critical
+        );
+    }
+
+    #[test]
+    fn bps_black_swan_explicit_key_overrides_default() {
+        let mut t = bps_thresholds(); // critical=300
+        t.insert("black_swan_bps".into(), 500);
+        // 450 bps: < explicit black_swan(500) → CRITICAL.
+        assert_eq!(
+            state_for_bps_discount(Decimal::from_str("0.0450").unwrap(), &t),
+            PegState::Critical
+        );
+        // 550 bps: ≥ explicit black_swan(500) → BLACK_SWAN.
+        assert_eq!(
+            state_for_bps_discount(Decimal::from_str("0.0550").unwrap(), &t),
+            PegState::BlackSwan
         );
     }
 
@@ -585,5 +672,298 @@ mod tests {
             PegState::Critical,
             "synthesized CR=1.0 fires a FALSE Critical — H2 skips the tick instead",
         );
+    }
+
+    // NAV-sanity: an absurd PREMIUM on a direction-sensitive class means the
+    // intrinsic/NAV anchor is broken (sHYUSD: market ≈ +30% over a thin NAV
+    // print), and the ADR-0021 premium→PEGGED carve-out would mask it. The gate
+    // flips those to UNKNOWN; legitimate premiums and the whole discount side
+    // are untouched.
+    #[test]
+    fn premium_sanity_flags_broken_intrinsic_on_direction_sensitive() {
+        // sHYUSD-class: ~−30% premium on a yield stable / LST → broken anchor.
+        assert!(premium_sanity_violated(
+            AssetClass::StableYield,
+            Decimal::from_str("-0.30").unwrap()
+        ));
+        assert!(premium_sanity_violated(
+            AssetClass::Lst,
+            Decimal::from_str("-0.30").unwrap()
+        ));
+    }
+
+    #[test]
+    fn premium_sanity_allows_real_premiums() {
+        // INF ≈ −162 bps is the widest legit premium observed — must pass.
+        assert!(!premium_sanity_violated(
+            AssetClass::Lst,
+            Decimal::from_str("-0.0162").unwrap()
+        ));
+        // Boundary is strict: exactly 10% is allowed, a hair past is not.
+        assert!(!premium_sanity_violated(
+            AssetClass::Lst,
+            Decimal::from_str("-0.10").unwrap()
+        ));
+        assert!(premium_sanity_violated(
+            AssetClass::Lst,
+            Decimal::from_str("-0.1001").unwrap()
+        ));
+    }
+
+    #[test]
+    fn premium_sanity_ignores_discount_side_and_symmetric_classes() {
+        // A huge DISCOUNT (positive) is a real depeg — classified by the bands,
+        // never laundered into UNKNOWN.
+        assert!(!premium_sanity_violated(
+            AssetClass::StableYield,
+            Decimal::from_str("0.30").unwrap()
+        ));
+        // Symmetric classes (fiat) are not direction-sensitive — no masking to
+        // undo; a 30% deviation there already trips CRITICAL on its own.
+        assert!(!premium_sanity_violated(
+            AssetClass::StableFiat,
+            Decimal::from_str("-0.30").unwrap()
+        ));
+    }
+
+    // ── Proptest helpers ──────────────────────────────────────────────────────
+
+    /// Build a strictly ordered bps threshold map (drift < depeg < critical,
+    /// all >= 1) so `state_for_bps_discount` has a well-formed input.
+    fn arb_bps_thresholds() -> impl Strategy<Value = HashMap<String, u32>> {
+        (1u32..=50u32, 1u32..=50u32, 1u32..=50u32).prop_map(|(a, b, c)| {
+            // Sort and spread so drift < depeg < critical.
+            let mut vals = [a, a + b, a + b + c];
+            vals.sort_unstable();
+            let [drift, depeg, critical] = vals;
+            let mut m = HashMap::new();
+            m.insert("drift".into(), drift.max(1));
+            m.insert("depeg".into(), depeg.max(drift + 1));
+            m.insert("critical".into(), critical.max(depeg + 1));
+            m
+        })
+    }
+
+    /// Build a strictly ordered CR threshold map (black_swan < critical < depeg <
+    /// drift, all >= 1). For CR: lower ratio = worse, so thresholds descend in
+    /// severity order.
+    fn arb_cr_thresholds() -> impl Strategy<Value = HashMap<String, u32>> {
+        (1u32..=30u32, 1u32..=30u32, 1u32..=30u32, 1u32..=30u32).prop_map(|(a, b, c, d)| {
+            // We need black_swan < critical < depeg < drift.
+            let mut vals = [a, a + b, a + b + c, a + b + c + d];
+            vals.sort_unstable();
+            let [bs, crit, dep, drift] = vals;
+            let mut m = HashMap::new();
+            m.insert("drift".into(), (drift + 100).max(1));
+            m.insert("depeg".into(), (dep + 100).max(1));
+            m.insert("critical".into(), (crit + 100).max(1));
+            m.insert("black_swan".into(), (bs + 100).max(1));
+            m
+        })
+    }
+
+    fn arb_peg_state() -> impl Strategy<Value = PegState> {
+        prop_oneof![
+            Just(PegState::Pegged),
+            Just(PegState::Drift),
+            Just(PegState::Depeg),
+            Just(PegState::Critical),
+            Just(PegState::BlackSwan),
+            Just(PegState::Unknown),
+        ]
+    }
+
+    proptest! {
+        /// BPS MONOTONICITY: for any two discounts d1 and d2 with |d1| <= |d2|,
+        /// the strictness rank of the classified state must be non-decreasing.
+        /// A bigger deviation must never yield a less-strict classification.
+        #[test]
+        fn bps_monotonicity(
+            thresholds in arb_bps_thresholds(),
+            // d1_abs in [0, 0.2], d2_delta in [0, 0.2] (so d2 = d1 + delta >= d1)
+            d1_abs_thousandths in 0u32..=2000u32,
+            delta_thousandths   in 0u32..=2000u32,
+        ) {
+            let d1 = Decimal::new(d1_abs_thousandths as i64, 4);
+            let d2 = d1 + Decimal::new(delta_thousandths as i64, 4);
+
+            let s1 = state_for_bps_discount(d1, &thresholds);
+            let s2 = state_for_bps_discount(d2, &thresholds);
+
+            prop_assert!(
+                rank(s2) >= rank(s1),
+                "monotonicity violated: |d1|={} → {:?}(rank {}) but |d2|={} → {:?}(rank {})",
+                d1, s1, rank(s1), d2, s2, rank(s2)
+            );
+        }
+
+        /// CR MONOTONICITY (inverted): for any two ratios cr1 >= cr2,
+        /// rank(state_for_cr(cr2)) >= rank(state_for_cr(cr1)).
+        /// Lower CR → stricter or equal state.
+        #[test]
+        fn cr_monotonicity_inverted(
+            thresholds in arb_cr_thresholds(),
+            // cr1 in [0.5, 3.0], delta >= 0 → cr2 = cr1 - delta <= cr1
+            cr1_hundredths in 50u32..=300u32,
+            delta_hundredths in 0u32..=200u32,
+        ) {
+            // cr2 = cr1 - delta (may go negative; state_for_cr clamps via .max(0))
+            let cr1 = Decimal::new(cr1_hundredths as i64, 2);
+            let delta = Decimal::new(delta_hundredths as i64, 2);
+            let cr2 = cr1 - delta; // cr2 <= cr1 → cr2 should be >= as strict
+
+            let s1 = state_for_cr(cr1, &thresholds);
+            let s2 = state_for_cr(cr2, &thresholds);
+
+            prop_assert!(
+                rank(s2) >= rank(s1),
+                "CR monotonicity violated: cr1={} → {:?}(rank {}) but cr2={} → {:?}(rank {})",
+                cr1, s1, rank(s1), cr2, s2, rank(s2)
+            );
+        }
+
+        /// HYSTERESIS NON-FLAP (bps): within the deadband the state must be
+        /// held.  Specifically: if `candidate_raw` is strictly LESS strict than
+        /// `current`, but the discount is still above the exit threshold
+        /// (`threshold × (1 − deadband_pct / 100)`), the result must equal
+        /// `current` (not flap to the looser state).
+        ///
+        /// Implementation note: `classify_with_hysteresis` uses `lower_thresholds`
+        /// which is private; we test the observable behaviour at the public API.
+        #[test]
+        fn hysteresis_no_flap_within_deadband(
+            deadband_pct in 1u32..=50u32,
+            // Drift threshold in [10, 100] bps (0.001 to 0.01).
+            drift_bps in 10u32..=100u32,
+            // discount just below drift entry but above exit:
+            // entry = drift_bps; exit = drift_bps × (1 - deadband/100)
+            // pick discount in [exit+1, drift_bps-1].
+        ) {
+            // Build a threshold map with just drift (depeg/critical far away).
+            let mut thresholds = HashMap::new();
+            thresholds.insert("drift".into(), drift_bps);
+            thresholds.insert("depeg".into(), drift_bps * 10);
+            thresholds.insert("critical".into(), drift_bps * 20);
+
+            // exit = floor(drift_bps × (100 - deadband) / 100)
+            let keep = 100u32.saturating_sub(deadband_pct);
+            let exit_bps = drift_bps.saturating_mul(keep) / 100;
+
+            // Need at least one integer bps in (exit, drift) for a test to be meaningful.
+            prop_assume!(exit_bps + 1 < drift_bps);
+
+            // Pick a discount midway through the deadband.
+            let mid_bps = exit_bps + 1; // strictly above exit, strictly below entry
+            let discount = Decimal::new(mid_bps as i64, 4); // bps / 10000
+
+            // Current is DRIFT; raw classification at this discount is PEGGED
+            // (below the entry drift_bps). The deadband should hold us in DRIFT.
+            let result = classify_with_hysteresis(
+                AssetClass::StableFiat, // symmetric class
+                discount,
+                &thresholds,
+                PegState::Drift,
+                deadband_pct,
+            );
+
+            prop_assert_eq!(
+                result,
+                PegState::Drift,
+                "inside deadband (discount={} bps, entry={}, exit={}): \
+                 should stay DRIFT but got {:?}",
+                mid_bps, drift_bps, exit_bps, result
+            );
+        }
+
+        /// ESCALATION-NEVER-SLOWED-BY-DEADBAND: the deadband must never
+        /// prevent or delay escalation to a stricter band.  For any discount
+        /// >= entry threshold from `current`, the result must be at least as
+        /// strict as the plain classification.
+        #[test]
+        fn escalation_never_slowed_by_deadband(
+            deadband_pct in 0u32..=50u32,
+            thresholds in arb_bps_thresholds(),
+            current in arb_peg_state(),
+            discount_thousandths in 0u32..=10_000u32,
+        ) {
+            let discount = Decimal::new(discount_thousandths as i64, 4);
+            let plain = state_for_bps_discount(discount, &thresholds);
+            let with_band = classify_with_hysteresis(
+                AssetClass::StableFiat,
+                discount,
+                &thresholds,
+                current,
+                deadband_pct,
+            );
+            // When the plain result is stricter (or equal) than current, the
+            // hysteresis function must return exactly the plain result.
+            if rank(plain) >= rank(current) {
+                prop_assert_eq!(
+                    with_band, plain,
+                    "deadband slowed escalation: current={:?} discount={} plain={:?} but got={:?}",
+                    current, discount, plain, with_band
+                );
+            }
+        }
+
+        /// CR HYSTERESIS NON-FLAP: within the CR deadband (above drift entry,
+        /// below drift exit), the state must be held at DRIFT.  For CR, lower
+        /// CR is worse (escalation) so the exit threshold is ABOVE the entry.
+        ///
+        /// Constraint: we only generate parameter combinations where all
+        /// band exit thresholds remain below the drift entry threshold
+        /// (`exit_depeg < drift`). This matches the production use case
+        /// (hyUSD, assets.toml: deadband=2%, depeg=115, exit_depeg=117,
+        /// drift=130 — so 117 < 130, no band overlap).
+        /// When deadbands are so large that `exit_depeg >= drift`, the bands
+        /// overlap and the "hold" invariant becomes more complex (cross-band
+        /// contamination). We use `prop_assume!` to stay in the safe zone.
+        #[test]
+        fn cr_hysteresis_no_flap_within_deadband(
+            deadband_pct in 1u32..=20u32,
+            // drift at 150% ± jitter so the arithmetic stays simple.
+            drift_offset in 0u32..=30u32,
+        ) {
+            let drift = 150 + drift_offset;
+            // Keep a reasonable gap between drift and depeg so the exit
+            // threshold for depeg stays well below the drift entry.
+            // depeg = drift - 20 ensures exit_depeg = (drift-20)*(1+pct/100)
+            // < drift for any deadband_pct up to ~5%.
+            let depeg = drift - 20;
+            let critical = drift - 40;
+            let black_swan = drift - 60;
+
+            // Guard: only proceed if exit_depeg < drift (no band overlap).
+            let exit_depeg = depeg.saturating_mul(100 + deadband_pct) / 100;
+            prop_assume!(exit_depeg < drift);
+
+            let mut thresholds = HashMap::new();
+            thresholds.insert("drift".into(), drift);
+            thresholds.insert("depeg".into(), depeg);
+            thresholds.insert("critical".into(), critical);
+            thresholds.insert("black_swan".into(), black_swan);
+
+            // exit_drift = drift × (1 + deadband/100)
+            let exit_drift = drift.saturating_mul(100 + deadband_pct) / 100;
+
+            // Need at least one integer CR value between drift and exit_drift.
+            prop_assume!(exit_drift > drift + 1);
+
+            // CR just above the drift entry but below exit_drift:
+            // raw = Pegged (rank 0), but should stay Drift via deadband.
+            let mid_pct = drift + 1; // strictly above entry
+            prop_assume!(mid_pct < exit_drift); // strictly below exit
+
+            let cr = Decimal::new(mid_pct as i64, 2);
+            let result = classify_cr_with_hysteresis(cr, &thresholds, PegState::Drift, deadband_pct);
+
+            prop_assert_eq!(
+                result,
+                PegState::Drift,
+                "inside CR deadband (cr={}%, entry={}%, exit_drift={}%, exit_depeg={}%): \
+                 should stay DRIFT but got {:?}",
+                mid_pct, drift, exit_drift, exit_depeg, result
+            );
+        }
     }
 }

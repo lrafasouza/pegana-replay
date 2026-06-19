@@ -1,15 +1,16 @@
 [package]
 name        = "pegana-replay-cli"
-# Tracks the methodology crate version (0.3.0): the CLI's verify-identity is
+# Tracks the methodology crate version (0.4.0): the CLI's verify-identity is
 # pegana_methodology::methodology_version(), so the published CLI version must
-# equal the methodology version it embeds, else the install hint in
-# main.rs (VERSION_MISMATCH → "install --version <methodology_version>")
-# points at a release that doesn't exist. See docs/.../10-distribution.md §8.
-version     = "0.3.0"
+# equal the methodology version it embeds. Engine now emits 0.4.0 receipts
+# (verified live 2026-06-16), so a v0.4.0 verifier RELEASE must be cut on
+# pegana-replay for the public to verify current receipts — see the release
+# runbook. Until then the installer still ships v0.2.0 (verifies older receipts).
+version     = "0.4.0"
 edition     = "2021"
 description = "Reproduce and verify a Pegana alert from its public receipt."
 license     = "MIT"
-repository  = "https://github.com/lrafasouza/pegana"
+repository  = "https://github.com/lrafasouza/pegana-replay"
 keywords    = ["pegana", "audit", "verify", "solana"]
 categories  = ["command-line-utilities"]
 

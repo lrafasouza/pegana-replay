@@ -1,4 +1,4 @@
-# Pegana — Asset universe v1.4 (21 assets active on mainnet, 28 total entries; 7 inactive via `active = false`: BRZ, JupUSD, EURC, dzSOL, vSOL, JLP, pbUSDC. Historical context: 6 yield-bearing stables added in Phase A; 5 Sanctum LSTs + USD* removed 2026-05-22 due to no usable market source; USD+ deferred until Streamflow mainnet launch; JLP added 2026-05-29 to close Phase 0 gap.)
+# Pegana — Asset universe v1.5 (26 assets active on mainnet, 28 total entries; 2 inactive via `active = false`: BRZ, pbUSDC — both deactivated 2026-06-01, only thin/dust DEX pairs left. 13 of the 26 active are beta (`monitoring_only` — set by DB migration mig 0048+, NOT a field here): their alerts are live but the calibration is provisional (released as beta 2026-06-16; the read-time egress gate was removed). The 2026-06-11 launch activated JupUSD, EURC, dzSOL, vSOL, JLP as monitoring-grade Phase-0 assets (this header previously listed them as inactive — stale). Historical context: 6 yield-bearing stables added in Phase A; 5 Sanctum LSTs + USD* removed 2026-05-22 due to no usable market source; USD+ deferred until Streamflow mainnet launch; JLP added 2026-05-29 to close Phase 0 gap; dSOL removed after the Drift exploit 2026-04-01.)
 #
 # Each asset declares:
 #   - identity:        symbol, mint, name, decimals, token_program
@@ -44,6 +44,10 @@ market         = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SO
 pyth_feed_id   = "0xc2289a6a43d2ce91c6f55caec370f4acc38a2ed477f58813334c6d03749ff2a4"
 # Calibrated 2026-05-25 from 24h p99 ~33 bps.
 thresholds_bps = { drift = 40, depeg = 100, critical = 250 }
+# monitoring-only per ADR-0015 on 2026-06-10 — calibration v1: p95 48.5 bps > drift 40,
+# 0 transitions. 24h-sampled band too tight vs the 12.8d window. Stays active+monitored
+# but excluded from the launch verdict. Re-calibrate (drift→~61) + re-promote post-launch
+# after a clean 7-day run. See docs/CALIBRATION-v1.md.
 
 [[assets]]
 symbol         = "bSOL"
@@ -74,6 +78,9 @@ market         = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SO
 pyth_feed_id   = "0xf51570985c642c49c2d6e50156390fdba80bb6d5f7fa389d2f012ced4f7d208f"
 # Calibrated 2026-05-25 from 24h p99 ~112 bps — INF runs hot vs the rest.
 thresholds_bps = { drift = 140, depeg = 280, critical = 560 }
+# monitoring-only per ADR-0015 on 2026-06-10 — calibration v1: p95 146.2 bps > drift 140,
+# 0 transitions. 24h-sampled band too tight. Stays active+monitored, excluded from the
+# launch verdict. Re-calibrate (drift→~183) + re-promote post-launch. See docs/CALIBRATION-v1.md.
 
 # Drift protocol was exploited 2026-04-01 ($285M, DPRK-linked admin key
 # compromise). TVL collapsed from $550M to <$10M; protocol is permanently
@@ -96,6 +103,9 @@ market         = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SO
 pyth_feed_id   = "0x2997d5f9e96563cef9151cffc4580803930826fa38c4af5062de2363720769ea"
 # Calibrated 2026-05-25 from 24h p99 ~35 bps.
 thresholds_bps = { drift = 45, depeg = 110, critical = 250 }
+# monitoring-only per ADR-0015 on 2026-06-10 — calibration v1: p95 50.2 bps > drift 45,
+# 0 transitions. 24h-sampled band too tight. Stays active+monitored, excluded from the
+# launch verdict. Re-calibrate (drift→~63) + re-promote post-launch. See docs/CALIBRATION-v1.md.
 
 [[assets]]
 symbol         = "JupSOL"
@@ -231,6 +241,9 @@ market         = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SO
 pyth_feed_id   = ""   # no Pyth feed — Sanctum is the source of truth
 # Calibrated 2026-05-25 from 24h p99 ~44 bps.
 thresholds_bps = { drift = 55, depeg = 140, critical = 280 }
+# monitoring-only per ADR-0015 on 2026-06-10 — calibration v1: p95 59.7 bps > drift 55,
+# 2 transitions (<3). 24h-sampled band too tight. Stays active+monitored, excluded from the
+# launch verdict. Re-calibrate (drift→~75) + re-promote post-launch. See docs/CALIBRATION-v1.md.
 
 [[assets]]
 symbol         = "hyloSOL+"
@@ -245,6 +258,11 @@ intrinsic      = { kind = "sanctum_lst", symbol = "hyloSOL+" }
 market         = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
 pyth_feed_id   = ""
 thresholds_bps = { drift = 30, depeg = 120, critical = 350 }
+# monitoring-only per migration 0049 on 2026-06-14 — FROZEN single-source signal:
+# discount pinned to one distinct value over the window while market moves (the
+# Sanctum sol_per_lst intrinsic is not advancing). Cannot detect real stress, so
+# contained (excluded from public egress) pending genuine price discovery. The
+# engine freeze-detector is the systemic fix. See validation handoff 2026-06-14.
 
 [[assets]]
 symbol         = "sHYUSD"
@@ -263,6 +281,13 @@ pyth_feed_id   = ""   # no Pyth feed — exchange rate is the source of truth
 # Tight thresholds — sHYUSD market should track intrinsic closely; large gap
 # = redemption stress on the Stability Pool.
 thresholds_bps = { drift = 30, depeg = 100, critical = 300 }
+# monitoring-only per ADR-0015 on 2026-06-10 — calibration v1 RED FLAG: p95 2945 bps (29%),
+# p50 1418 bps (14%), 0 transitions all window AND engine_state_snapshot reports last_state=
+# PEGGED with ewma_discount = -0.2511 (-25%) — i.e. the engine actively confirms PEGGED on a
+# -25% gap that should be deep in CRITICAL@300. Either the premium-gate is freezing on garbage
+# thin-Jupiter prints on this mint (effectively unmonitored) or hylo_shyusd_rate is mispricing
+# (false-confirm). Stays active+monitored, excluded from verdict. DO NOT re-promote until the
+# market/intrinsic leg is root-caused + fixed. See docs/CALIBRATION-v1.md § Senior validation V2.
 
 # ============================================================
 # Synthetic leverage (1) — variable-leverage exposure, intrinsic-vs-market
@@ -430,6 +455,11 @@ peg_target     = "USD"
 # semantically represent the issuer-attested per-share intrinsic value.
 # NAV is NOT pegged to $1 by design — reflects reinsurance underwriting yield.
 # Same code path as USDY/syrupUSDC/sUSDe — no new adapter.
+# monitoring-only per migration 0050 on 2026-06-14 — FROZEN market leg: no liquid
+# secondary market, so the Jupiter quote sits at one value for ~20h while only the
+# NAV intrinsic updates. The public peg signal can't detect a real market move
+# (same property as hyloSOL+). Contained pending a reliable market/depth source
+# (liquidity gate, TIER 2). See ADR-0024.
 intrinsic      = { kind = "pyth_redemption_rate", feed = "ONYC/USD.NAV" }
 market         = { kind = "dex_screener_usd" }   # DexScreener top-liquidity pair (Orca pool ~$5.1M liquidity)
 pyth_feed_id   = ""
@@ -481,10 +511,10 @@ active         = false
 # ============================================================
 # Trust Layer v0.1.0 — Phase 0 additions (2026-05-28)
 # ------------------------------------------------------------
-# 4 new assets enter passive 14-day calibration window
-# (2026-05-28 → 2026-06-10). Activated at launch (2026-06-11) per the
-# per-asset rule in ADR-0002. JLP DROPPED from Phase 0 (no
-# JupiterPerpsNav IntrinsicStrategy yet; deferred to Phase 14).
+# These 5 assets stayed inactive during calibration, so the indexer skipped
+# them and they have zero calibration history. Owner override 2026-06-10:
+# activate JupUSD, JLP, EURC, dzSOL, and vSOL on 2026-06-11 as monitoring-grade
+# with provisional thresholds. See docs/operations/phase0-activation-2026-06-11.md.
 # ============================================================
 
 [[assets]]
@@ -503,7 +533,7 @@ market         = { kind = "jupiter_usd", numeraire = "USDC", numeraire_feed = "U
 pyth_feed_id   = "0x8ed858a2214e892c9371694fb6c8a9037b6ed4052c4edf209f8cb988484e81d9"
 # Mirrors USDe thresholds given similar delta-neutral mechanism.
 thresholds_bps = { drift = 25, depeg = 100, critical = 300 }
-active         = false                # → true on 2026-06-11 per ADR-0002 if calibration green
+active         = true                 # activated 2026-06-11 by owner override; monitoring-grade until tuned
 
 [[assets]]
 symbol         = "JLP"
@@ -531,7 +561,7 @@ pyth_feed_id   = "0xc811abc82b4bad1f9bd711a2773ccaa935b03ecef974236942cec5e0eb84
 # stress (perps liquidation events, redemption queue backlog); critical band
 # reflects structural break (oracle stale, redemption halted).
 thresholds_bps = { drift = 200, depeg = 500, critical = 1500 }
-active         = false                # → true on 2026-06-11 per ADR-0002 if calibration green
+active         = true                 # activated 2026-06-11 by owner override; monitoring-grade until tuned
 
 [[assets]]
 symbol         = "EURC"
@@ -544,12 +574,33 @@ token_program  = "spl"
 class          = "stable_fx"          # EUR-pegged, not USD (matches BRZ pattern)
 peg_target     = "EUR"
 # Intrinsic: invert USD/EUR cross. Pyth publishes FX.EUR/USD; with invert=false we use it directly as EUR-per-USD.
+# WEEKEND-DARK (FX feed): the EUR/USD intrinsic is a Pyth FX feed, and forex
+# closes Fri ~21:00–22:00 → Sun ~21:00–22:00 UTC (DST-dependent: summer ~21:00,
+# winter ~22:00). With the intrinsic absent the engine can't
+# compute a discount, so it SKIPS the recompute (main.rs H8 path: no
+# discount_snapshots row, pegana_engine_intrinsic_unavailable_total++). The
+# published state does NOT flip to UNKNOWN — it FREEZES at its last value; the
+# H12b sweep only *reports* it stale (observability), it does not change the
+# verdict. Verified live 2026-06-14: rows ran Fri→21:10 UTC, Sat fully dark, Sun
+# resumed ~21:00, last_state stayed PEGGED. Net for the promotion gate: exactly
+# ONE UTC date per weekend (Saturday) loses all rows — Fri/Sun keep partial-day
+# rows — so days_covered drops by ~1/weekend (NOT 2) and the 7-of-8 gate is
+# usually still reachable (see scripts/calibration-monitor.sql FX caveat).
+# SCOPE (verified live: EURC is monitoring_only=true since the Phase-0 launch —
+# migration 0048, "zero calibration history"): the weekend freeze does NOT reach
+# public alert egress (/v1/alerts etc. exclude monitoring_only) and no alert
+# fires (state doesn't transition). EURC IS still DISPLAYED on the web (screener
+# + asset-detail) with a MONITORING badge; during the dark window the asset-detail
+# StaleBanner shows a calm "FX market closed — expected, not an outage" variant
+# (web/lib/asset/forex.ts) instead of the alarming stale tone. Remaining nicety =
+# weekend-aware staleness→UNKNOWN for FX intrinsics in the engine (post-06-25
+# lock). No USD-pegged asset has this (feeds are 24/7 crypto).
 intrinsic      = { kind = "pyth_fx_cross", feed = "EUR/USD", invert = false }
 market         = { kind = "jupiter_usd", numeraire = "USDC", numeraire_feed = "USDC/USD" }
 # Mainnet Pyth feed Crypto.EURC/USD confirmed via hermes.pyth.network 2026-05-28.
 pyth_feed_id   = "0x76fa85158bf14ede77087fe3ae472f66213f6ea2f5b411cb2de472794990fa5c"
 thresholds_bps = { drift = 20, depeg = 75, critical = 250 }
-active         = false
+active         = true                 # activated 2026-06-11 by owner override; monitoring-grade until tuned
 
 [[assets]]
 symbol         = "dzSOL"
@@ -568,7 +619,7 @@ market         = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SO
 # Confidence checks disabled until Pyth lists the feed.
 pyth_feed_id   = ""
 thresholds_bps = { drift = 50, depeg = 120, critical = 280 }
-active         = false
+active         = true                 # activated 2026-06-11 by owner override; monitoring-grade until tuned
 
 [[assets]]
 symbol         = "vSOL"
@@ -587,15 +638,7 @@ market         = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SO
 pyth_feed_id   = ""
 # Wider tolerance — vSOL has more validator turnover by design.
 thresholds_bps = { drift = 55, depeg = 140, critical = 300 }
-active         = false
-
-# JLP (Jupiter Perps LP) intentionally NOT added in Phase 0. Reason: no
-# IntrinsicStrategy variant exists yet for "Jupiter Perps pool NAV" (the
-# pool composition is dynamic SOL/BTC/ETH/USDC). The Fixed1Usd / SanctumLst
-# / Pyth* variants are all semantically wrong. JLP deferred to Phase 14
-# pending implementation of a JupiterPerpsNav IntrinsicStrategy. Pyth feed
-# JLP/USD = 0xc811abc82b4bad1f9bd711a2773ccaa935b03ecef974236942cec5e0eb845a3a
-# is confirmed for future use.
+active         = true                 # activated 2026-06-11 by owner override; monitoring-grade until tuned
 
 # ============================================================
 # Pyth feeds (used by multiple assets, cached centrally)

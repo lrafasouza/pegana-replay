@@ -107,3 +107,81 @@ fn fail_when_input_tampered() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("FAIL"), "stderr: {stderr}");
 }
+
+// ── Fix 2: ERROR paths must exit 2, not 1 ───────────────────────────────────
+
+#[test]
+fn error_exit2_on_malformed_json_bundle() {
+    // Write a file with invalid JSON — parse fails → ERROR → exit 2.
+    let mut f = tempfile::NamedTempFile::new().unwrap();
+    f.write_all(b"{ this is not valid json }").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_pegana-replay"))
+        .arg("--bundle")
+        .arg(f.path())
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "expected exit 2 (ERROR); stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("ERROR"),
+        "expected ERROR prefix on stderr; got: {stderr}"
+    );
+}
+
+#[test]
+fn error_exit2_on_nonexistent_bundle_path() {
+    // Point to a path that definitely does not exist → read fails → ERROR → exit 2.
+    let output = Command::new(env!("CARGO_BIN_EXE_pegana-replay"))
+        .arg("--bundle")
+        .arg("/tmp/pegana_replay_test_nonexistent_bundle_abc123.json")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "expected exit 2 (ERROR); stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("ERROR"),
+        "expected ERROR prefix on stderr; got: {stderr}"
+    );
+}
+
+// ── Fix 2 + existing version logic: VERSION_MISMATCH exits 3 ────────────────
+
+#[test]
+fn version_mismatch_exit3_on_bogus_version() {
+    // Synthesise a valid receipt, then swap the methodology_version to a
+    // string that will never match the embedded CLI version.
+    let mut receipt = synth_receipt();
+    receipt.methodology_version = "0.0.0-bogus-test-version".into();
+    // The sha256 no longer matches either, but the version check fires first
+    // (exit 3) before the hash check (exit 1) so the exit code is 3.
+    let file = write_bundle(&receipt);
+    let output = Command::new(env!("CARGO_BIN_EXE_pegana-replay"))
+        .arg("--bundle")
+        .arg(file.path())
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "expected exit 3 (VERSION_MISMATCH); stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("VERSION_MISMATCH"),
+        "expected VERSION_MISMATCH on stderr; got: {stderr}"
+    );
+}

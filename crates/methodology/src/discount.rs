@@ -38,21 +38,28 @@ pub fn compute_discount(
 
 /// Plausibility filter for raw discount samples.
 ///
-/// `|discount| > 1.0` would mean market trades at more than 2× or less than
-/// 0× intrinsic — not economically possible for any tracked class. Filtering
-/// these keeps a stale-oracle or degenerate-NAV blip from contaminating the
-/// smoothed `discount` for the next 7 buckets.
+/// `|discount| >= 1.0` would mean market trades at **0× or less** (a $0 / total
+/// loss) or at **2× or more** of intrinsic — not economically possible for any
+/// tracked class. A real depeg always leaves the asset worth *something* (market
+/// strictly between $0 and 2× peg, i.e. `|discount| < 1.0`), so it stays
+/// plausible and keeps alerting through the normal bands. Filtering the `>= 1.0`
+/// boundary keeps a degenerate quote (e.g. a Jupiter route returning
+/// `out_amount = 0` → discount = exactly `1.0`) from contaminating the smoothed
+/// `discount` for the next ~7 buckets. The bound is **strict** (`<`): the
+/// inclusive `<=` historically let a single `$0` tick paint JupUSD CRITICAL for
+/// ~7.5 min (2026-06-12 incident).
 ///
 /// Caller (engine `try_recompute`) skips the EWMA update on `false` so the
 /// previous smoothed value stays put; the next sane sample resumes the
 /// pipeline. No publish, no alert — we never propagate the lie.
 pub fn is_plausible_discount_sample(d: Decimal) -> bool {
-    d.abs() <= Decimal::ONE
+    d.abs() < Decimal::ONE
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
     use std::str::FromStr;
 
     #[test]
@@ -126,9 +133,122 @@ mod tests {
         assert!(is_plausible_discount_sample(
             Decimal::from_str("0.0024").unwrap()
         ));
-        assert!(is_plausible_discount_sample(
+    }
+
+    /// Regression (2026-06-12): a degenerate market quote of $0 — a Jupiter
+    /// route returning `out_amount = 0` — makes `compute_discount` return
+    /// exactly `1.0` (a 100% "discount"). No asset trades at $0, so this is
+    /// missing data, not a total depeg, and must be rejected BEFORE the EWMA.
+    /// The inclusive `<= 1.0` bound let `1.0` through, poisoning the α=0.3
+    /// average and painting JupUSD CRITICAL for ~7.5 min off a single tick.
+    #[test]
+    fn plausibility_rejects_total_loss_and_doubling_boundary() {
+        // market = $0      → discount = +1.0  (impossible)
+        assert!(!is_plausible_discount_sample(Decimal::ONE));
+        // market = 2× peg  → discount = -1.0  (impossible)
+        assert!(!is_plausible_discount_sample(
             Decimal::from_str("-1").unwrap()
         ));
-        assert!(is_plausible_discount_sample(Decimal::ONE));
+        // A severe-but-REAL depeg (market still > $0) stays plausible so the
+        // normal bands keep alerting on it — we only reject the impossible.
+        assert!(is_plausible_discount_sample(
+            Decimal::from_str("0.97").unwrap()
+        ));
+        assert!(is_plausible_discount_sample(
+            Decimal::from_str("-0.97").unwrap()
+        ));
+    }
+
+    // ── Proptest ──────────────────────────────────────────────────────────────
+
+    /// Build an `AssetClass` strategy — all 8 variants.
+    fn arb_asset_class() -> impl Strategy<Value = pegana_common_verify::AssetClass> {
+        use pegana_common_verify::AssetClass;
+        prop_oneof![
+            Just(AssetClass::Lst),
+            Just(AssetClass::StableFiat),
+            Just(AssetClass::StableCdp),
+            Just(AssetClass::StableRwa),
+            Just(AssetClass::StableDn),
+            Just(AssetClass::StableFx),
+            Just(AssetClass::SynthLev),
+            Just(AssetClass::StableYield),
+        ]
+    }
+
+    proptest! {
+        /// BOUNDARY: `is_plausible_discount_sample(d)` is equivalent to
+        /// `d.abs() < Decimal::ONE` for all values in [-2, 2], including the
+        /// exact boundaries ±1.0 (regression for the 2026-06-12 JupUSD incident
+        /// where `out_amount = 0` → discount exactly 1.0 was let through).
+        #[test]
+        fn plausibility_boundary_swept(
+            // Generate discount in multiples of 0.001 over [-2.0, 2.0]
+            // (4000 distinct values, covers ±1.0 exactly).
+            hundredths in -2000i64..=2000i64,
+        ) {
+            let d = Decimal::new(hundredths, 3); // precision 3 → hundredths/1000
+            let expected = d.abs() < Decimal::ONE;
+            prop_assert_eq!(
+                is_plausible_discount_sample(d),
+                expected,
+                "d = {} — expected plausible={} but got {}",
+                d, expected, is_plausible_discount_sample(d)
+            );
+        }
+
+        /// NONE-NEVER-LAUNDERED: `compute_discount` must never return
+        /// `Some(x)` where `|x| >= 1` for any plausible-looking inputs.
+        ///
+        /// Note: `compute_discount` itself does NOT filter by
+        /// `is_plausible_discount_sample`; that guard lives in the engine
+        /// (`try_recompute`). However, a discount of magnitude >= 1 can only
+        /// arise when `market / intrinsic >= 2` or `market <= 0`. Within the
+        /// domain where `intrinsic > 0` (otherwise None is returned) and
+        /// `market` is in [0, 2 × intrinsic), the output is always plausible.
+        /// This property asserts that contract: for `market` in
+        /// `(0, 2×intrinsic)` the result is `Some(x)` with `|x| < 1`.
+        #[test]
+        fn compute_discount_none_never_laundered(
+            // Use integer multiples to avoid Decimal precision issues.
+            // intrinsic in [1, 10_000], market in [1, 2×intrinsic − 1]
+            intrinsic_units in 1i64..=10_000i64,
+            // market expressed as fraction of intrinsic in (0, 2):
+            // numer / denom where numer/denom ∈ (0, 2)
+            market_numer in 1u32..=19_999u32, // <2×10000 scaled
+        ) {
+            // market_numer is in (0, 20000); interpret as (market_numer/10000) × intrinsic.
+            // So market ∈ (0, 2×intrinsic).
+            let intrinsic = Decimal::new(intrinsic_units, 0);
+            // market = market_numer / 10000 × intrinsic
+            let market = Decimal::new(market_numer as i64, 0) * intrinsic
+                / Decimal::new(10_000, 0);
+
+            // Use StableFiat so we always take the USD path.
+            let d = compute_discount(
+                intrinsic, market, None, None,
+                pegana_common_verify::AssetClass::StableFiat,
+            );
+            let result = d.expect("non-zero intrinsic → Some");
+            prop_assert!(
+                result.abs() < Decimal::ONE,
+                "discount = {} (market={} intrinsic={}) — magnitude >= 1 must never be returned",
+                result, market, intrinsic
+            );
+        }
+
+        /// ZERO-INTRINSIC-ALWAYS-NONE: no matter the market / class / sol
+        /// values, a zero intrinsic must never return Some.
+        #[test]
+        fn zero_intrinsic_always_none(
+            market_int in -100_000i64..=100_000i64,
+            class in arb_asset_class(),
+        ) {
+            let market = Decimal::new(market_int, 4);
+            let result = compute_discount(
+                Decimal::ZERO, market, None, None, class,
+            );
+            prop_assert_eq!(result, None, "zero intrinsic must always return None");
+        }
     }
 }

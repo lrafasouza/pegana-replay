@@ -63,6 +63,7 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use pegana_common_verify::{AssetClass, PegState};
+    use proptest::prelude::*;
     use rust_decimal::Decimal;
     use std::collections::HashMap;
     use std::str::FromStr;
@@ -155,5 +156,134 @@ mod tests {
     fn hex_encoding_is_64_chars() {
         let digest = [0u8; 32];
         assert_eq!(hex_sha256(digest).len(), 64);
+    }
+
+    // ── Proptest ──────────────────────────────────────────────────────────────
+
+    /// Generate TOML-safe symbol strings (alphanumeric, 1-8 chars).
+    fn arb_symbol() -> impl Strategy<Value = String> {
+        "[A-Za-z][A-Za-z0-9]{0,7}".prop_map(|s| s)
+    }
+
+    proptest! {
+        /// INVARIANT-UNDER-COMMENT-CHANGES: inserting or removing TOML comments
+        /// must NOT change `canonical_assets_hash`.  The parser strips comments
+        /// before re-serializing, so the canonical form is identical.
+        #[test]
+        fn assets_hash_invariant_under_comments(
+            symbol in arb_symbol(),
+            comment_text in "[a-z ]{0,30}",
+        ) {
+            let base   = format!("[[assets]]\nsymbol = \"{symbol}\"\n");
+            let commented = format!("[[assets]]\nsymbol = \"{symbol}\"\n# {comment_text}\n");
+            let h_base = canonical_assets_hash(&base).unwrap();
+            let h_with = canonical_assets_hash(&commented).unwrap();
+            prop_assert_eq!(
+                h_base, h_with,
+                "comment insertion changed the hash for symbol={}",
+                symbol
+            );
+        }
+
+        /// CHANGES-ON-VALUE-CHANGE: if the symbol value is different, the hash
+        /// must differ (with overwhelming probability — toml→sha256 is not
+        /// collision-prone at this scale).
+        #[test]
+        fn assets_hash_changes_on_value_change(
+            sym1 in arb_symbol(),
+            sym2 in arb_symbol(),
+        ) {
+            prop_assume!(sym1 != sym2);
+            let t1 = format!("[[assets]]\nsymbol = \"{sym1}\"\n");
+            let t2 = format!("[[assets]]\nsymbol = \"{sym2}\"\n");
+            let h1 = canonical_assets_hash(&t1).unwrap();
+            let h2 = canonical_assets_hash(&t2).unwrap();
+            prop_assert_ne!(h1, h2, "different symbols must produce different hashes");
+        }
+
+        /// INVARIANT-UNDER-WHITESPACE: extra blank lines and leading/trailing
+        /// whitespace around values do not change the canonical hash because the
+        /// TOML parser normalises them.
+        #[test]
+        fn assets_hash_invariant_under_extra_whitespace(
+            symbol in arb_symbol(),
+        ) {
+            let compact = format!("[[assets]]\nsymbol=\"{symbol}\"\n");
+            let spaced  = format!("[[assets]]\nsymbol = \"{symbol}\"\n\n");
+            let h_compact = canonical_assets_hash(&compact).unwrap();
+            let h_spaced  = canonical_assets_hash(&spaced).unwrap();
+            prop_assert_eq!(
+                h_compact, h_spaced,
+                "whitespace difference changed hash for symbol={}",
+                symbol
+            );
+        }
+
+        /// HASH-STABILITY-UNDER-RECEIPT-ROUND-TRIP: `canonical_receipt_hash`
+        /// must be identical before and after a serialize → deserialize
+        /// round-trip of `InputsFrozen` and `Computed`.
+        ///
+        /// We parametrise over methodology version strings and a few numeric
+        /// fields; the struct shape is fixed so we build variants from those.
+        #[test]
+        fn receipt_hash_stable_under_round_trip(
+            version in "[0-9]\\.[0-9]\\.[0-9]",
+            intrinsic_int in 1i64..=1_000_000i64,
+            market_int    in 1i64..=1_000_000i64,
+            alpha_int     in 1u32..=99u32,
+        ) {
+            let inputs = InputsFrozen {
+                asset: "USDC".into(),
+                class: AssetClass::StableFiat,
+                now: Utc::now(),
+                alpha: Decimal::new(alpha_int as i64, 2),
+                intrinsic_usd: Decimal::new(intrinsic_int, 4),
+                market_usd:    Decimal::new(market_int, 4),
+                intrinsic_sol: None,
+                market_sol: None,
+                ewma_prev: None,
+                hyusd_cr: None,
+                previous_state: PegState::Pegged,
+                candidate_state: None,
+                candidate_since: None,
+                thresholds: HashMap::new(),
+                threshold_kind: "bps".into(),
+                pyth_entries: HashMap::new(),
+                confirm_up_secs: 30,
+                decay_down_secs: 120,
+            };
+            let computed = crate::receipt::Computed {
+                discount_raw:    Decimal::new(intrinsic_int - market_int, 4),
+                discount_smooth: Decimal::new(0, 0),
+                final_state: PegState::Pegged,
+                confidence_label: "high".into(),
+            };
+
+            let toml_str = "[[assets]]\nsymbol=\"USDC\"\n";
+
+            // Hash before round-trip.
+            let h_before = canonical_receipt_hash(
+                &version, None, toml_str, &inputs, &computed,
+            ).unwrap();
+
+            // Serialize → deserialize inputs and computed.
+            let inputs_json   = serde_json::to_string(&inputs).unwrap();
+            let computed_json = serde_json::to_string(&computed).unwrap();
+            let inputs_rt: InputsFrozen =
+                serde_json::from_str(&inputs_json).unwrap();
+            let computed_rt: crate::receipt::Computed =
+                serde_json::from_str(&computed_json).unwrap();
+
+            // Hash after round-trip.
+            let h_after = canonical_receipt_hash(
+                &version, None, toml_str, &inputs_rt, &computed_rt,
+            ).unwrap();
+
+            prop_assert_eq!(
+                h_before, h_after,
+                "receipt hash changed after serde round-trip for version={}",
+                version
+            );
+        }
     }
 }

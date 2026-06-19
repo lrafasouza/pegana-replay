@@ -1,5 +1,40 @@
 # pegana-methodology changelog
 
+## 0.4.0 — 2026-06-15
+
+Behavior change (MINOR) — the "validation follow-ups" cluster (ADR-0025).
+Additive publish-time honesty guards; no existing band thresholds change.
+
+- **NAV-sanity premium cap** — new `premium_sanity_violated(class, discount)` +
+  `NAV_PREMIUM_SANITY_BPS = 1000`. A premium (negative discount) beyond 10% on a
+  direction-sensitive class (LST, stable_yield) is not demand pressure — it means
+  the NAV/intrinsic anchor is broken. The ADR-0021 premium→PEGGED carve-out would
+  otherwise mask it as a confident PEGGED off a garbage anchor (sHYUSD: market
+  ≈ +30% over a thin-Jupiter NAV print). The engine now publishes honest-dark
+  UNKNOWN instead. Magnitude check on one smoothed sample — explicitly NOT the
+  discount-constancy freeze detector rejected in ADR-0024. >6× margin over the
+  widest legitimate premium observed across the 26 assets (INF ≈160 bps).
+- **Confidence gate** — an asset with NO Pyth feed anywhere (neither a
+  `pyth_spot`/`jupiter_usd`-numeraire market nor a `pyth_*` intrinsic) has no
+  independent oracle cross-check, so it can no longer assert `high` confidence:
+  the engine's `pyth_confidence_for_asset` caps it at `medium`. Blast radius
+  today is exactly **sUSD** (DexScreener ~$8k pool + custom rate); every other
+  active asset has a Pyth dependency and is unchanged. Answers the validation
+  grill "why does sUSD carry HIGH off a thin single source?". (Display-only —
+  confidence is not a band threshold; no state-classification or calibration
+  impact.)
+- **BLACK_SWAN reachable from spread** — `state_for_bps_discount` gains a
+  black_swan band, default `2 × critical` (overridable via `black_swan` /
+  `black_swan_bps`). Previously the bps path topped out at CRITICAL and only the
+  CR path (hyUSD) could reach BLACK_SWAN, so the publicly-advertised 5th state
+  was unreachable for 25/26 assets — the validation "Four/Five states" honesty
+  gap. Now a >2×-critical move (a USDC 4%+ break, a UST-style CRITICAL→BLACK_SWAN
+  cascade) is labelled terminal-grade. Re-labels only the most extreme moves
+  (already CRITICAL today); nothing at/below critical changes. It auto-exits via
+  normal hysteresis — the engine does NOT enforce a "never auto-exits /
+  operator-reset" terminal state (no reset path exists to make that safe), and
+  the CR-path black_swan already behaved this way. See ADR-0025.
+
 ## 0.3.0 — 2026-06-04
 
 Behavior change (MINOR). Activated immediately under the ADR-0009 **critical-bug
