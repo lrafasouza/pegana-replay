@@ -206,13 +206,18 @@ The CLI:
 3. Loads the matching version of `pegana-methodology` (this repo
    pins by git tag — the release tag equals the methodology version it
    embeds, e.g. `v0.2.0` ships methodology 0.2.0).
-4. Re-runs the methodology against `inputs_frozen`.
-5. Compares the resulting computed values byte-for-byte against the
-   receipt's `computed` block.
-6. If they match, recomputes `receipt_sha256` and compares against
-   the receipt's claim.
-7. Exits 0 (PASS) iff all three (computed match, hash match,
-   methodology version match) succeed.
+4. Re-hashes the receipt's frozen inputs + recorded verdict using
+   `canonical_receipt_hash` and compares to the on-chain-anchored
+   canonical hash; checks the anchoring transaction was signed by a
+   pinned Pegana ops key.
+5. Exits 0 (PASS) iff both conditions hold: the hash matches and
+   (when `--verify-onchain`) the on-chain anchor is signed by an
+   accepted Pegana commit wallet.
+
+Note: the CLI does NOT re-execute the methodology or re-derive the
+verdict from raw market data — that is ADR-0019's documented design.
+It provides tamper-evidence: anyone can confirm the published history
+wasn't altered.
 
 This is offline after step 1. The replay binary doesn't need
 network access for the math — only to fetch the receipt and (with

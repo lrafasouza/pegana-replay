@@ -6,8 +6,9 @@ Open math + CLI behind every Pegana alert.
 ~27 LSTs, stablecoins, yield-bearing wrappers, CDPs, and synthetic-leverage
 tokens, and publishes a state transition the moment an asset moves out of
 PEGGED. Every alert ships with a **content-addressed receipt** — this repo is
-how anyone outside Pegana can reproduce that receipt offline and confirm the
-math.
+how anyone outside Pegana can verify a Pegana alert's canonical receipt hash
+and its signer-pinned on-chain anchor, confirming the published history wasn't
+altered (tamper-evidence).
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf \
@@ -49,9 +50,9 @@ subtree-push action; do not file PRs against it directly (see CONTRIBUTING).
 curl --proto '=https' --tlsv1.2 -LsSf \
   https://releases.pegana.xyz/pegana-replay-installer.sh | sh
 
-# 2. Fetch the bundle and replay. The CLI re-applies the same code in
-#    crates/methodology against the receipt's frozen inputs and compares
-#    the resulting hash byte-for-byte.
+# 2. Fetch the bundle and verify. The CLI re-hashes the receipt's frozen
+#    inputs + recorded verdict and compares to the stored canonical hash
+#    (tamper-evidence — it does NOT re-execute the methodology).
 pegana-replay --alert-id 0190ab12-3456-7890-abcd-ef0123456789
 
 # 3. Verify the on-chain commitment too (the engine commits each receipt's

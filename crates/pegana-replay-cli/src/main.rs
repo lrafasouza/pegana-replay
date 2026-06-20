@@ -2,9 +2,11 @@
 //!
 //! Trust Layer's verifier-of-record. Fetches a Receipt from the API
 //! (`/v1/audit/:id/replay-bundle`) or a local `--bundle` JSON, then
-//! re-runs `canonical_receipt_hash` through the methodology crate and
-//! compares against the stored hash. Designed to be auditable by a
-//! skeptic with nothing but the binary and a published alert ID.
+//! re-hashes the receipt's frozen inputs + recorded verdict and compares
+//! to the stored hash. Verifies the canonical receipt hash and its
+//! signer-pinned on-chain anchor, so anyone can confirm the published
+//! history wasn't altered (tamper-evidence). The CLI does NOT re-execute
+//! the methodology or re-derive the verdict — see ADR-0019.
 //!
 //! Exit codes (per `docs/pegana-trust-layer-v0.1.0/10-distribution.md` §8):
 //!   0 — PASS  (hash matches)
@@ -72,6 +74,13 @@ struct Cli {
     /// Suppress all output except final PASS/FAIL.
     #[arg(long)]
     quiet: bool,
+}
+
+/// Only `not_applicable` (DRIFT / cost-gated alerts that are never anchored)
+/// may be skipped silently. Every other non-committed status means an anchor
+/// is expected and its absence must surface as a non-pass.
+fn onchain_skip_is_ok(commit_status: &str) -> bool {
+    commit_status == "not_applicable"
 }
 
 /// Check that the fee-payer / first account key of the transaction is in the
@@ -221,8 +230,20 @@ async fn verify_onchain(
         .await
         .with_context(|| format!("GET {}", url))?;
     if resp.status() == 404 {
-        eprintln!("Warning: on-chain commit not yet completed for this alert.");
-        return Ok(());
+        // Parse commit_status to decide whether silence is safe.
+        let body_404: serde_json::Value = resp
+            .json()
+            .await
+            .unwrap_or(serde_json::Value::Null);
+        let status = body_404["commit_status"].as_str().unwrap_or("unknown");
+        if onchain_skip_is_ok(status) {
+            if !quiet {
+                eprintln!("Note: no on-chain anchor for this alert (commit_status: {status}) — expected for cost-gated transitions.");
+            }
+            return Ok(());
+        }
+        eprintln!("ANCHOR NOT VERIFIED (status: {status})");
+        std::process::exit(4);
     }
     if !resp.status().is_success() {
         bail!("API returned {}", resp.status());
@@ -407,7 +428,7 @@ async fn verify_onchain(
 
 #[cfg(test)]
 mod tests {
-    use super::onchain_signer_ok;
+    use super::{onchain_signer_ok, onchain_skip_is_ok};
 
     const SIGNER: &str = "7PpoyumFQMmcWzhJxDYr6iPv1fjYN41KBTA8xKKzu7R9";
     const OTHER_SIGNER: &str = "So11111111111111111111111111111111111111112";
@@ -489,5 +510,15 @@ mod tests {
         // Different version / alert_id values should still pass.
         let memo = format!("pegana-v1|9.9.9|ffffffff-ffff-ffff-ffff-ffffffffffff|{SHA}");
         assert!(memo_matches(&memo, SHA));
+    }
+
+    // ── 404 commit_status gate ────────────────────────────────────────────────
+
+    #[test]
+    fn onchain_404_pending_is_not_a_pass() {
+        assert!(onchain_skip_is_ok("not_applicable"));
+        for s in ["pending", "retry_exhausted", "wallet_drained", "persistence_failed", "unknown"] {
+            assert!(!onchain_skip_is_ok(s), "status {s} must not pass silently");
+        }
     }
 }

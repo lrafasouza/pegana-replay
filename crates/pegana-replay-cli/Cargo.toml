@@ -8,7 +8,7 @@ name        = "pegana-replay-cli"
 # runbook. Until then the installer still ships v0.2.0 (verifies older receipts).
 version     = "0.4.0"
 edition     = "2021"
-description = "Reproduce and verify a Pegana alert from its public receipt."
+description = "Verifies a Pegana alert's canonical receipt hash and its signer-pinned on-chain anchor — tamper-evidence without re-executing the methodology."
 license     = "MIT"
 repository  = "https://github.com/lrafasouza/pegana-replay"
 keywords    = ["pegana", "audit", "verify", "solana"]

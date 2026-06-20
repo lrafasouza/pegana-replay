@@ -29,11 +29,20 @@ pub fn compute_discount(
     if matches!(class, AssetClass::Lst) {
         if let (Some(i_sol), Some(m_sol)) = (intrinsic_sol, market_sol) {
             if !i_sol.is_zero() {
-                return Some(Decimal::ONE - (m_sol / i_sol));
+                // Checked: a near-zero `i_sol` overflows Decimal on divide, which
+                // rust_decimal's `/` PANICS on — inline in the engine loop, that
+                // kills the whole process (audit F-12). None = skip (H8), never crash.
+                return m_sol.checked_div(i_sol).and_then(|q| Decimal::ONE.checked_sub(q));
             }
         }
     }
-    Some(Decimal::ONE - (market / intrinsic))
+    // Checked: a micro-but-nonzero `intrinsic` (e.g. a Hylo CR<1 xSOL NAV ≈ 1e-27
+    // from a free-collateral rounding residual) makes `market / intrinsic` overflow
+    // Decimal::MAX, which rust_decimal's `/` operator PANICS on. `try_recompute`
+    // runs inline in the engine select loop with no catch_unwind, so that panic
+    // exits the process (crash-loop = monitoring blackout during a depeg, audit
+    // F-12). None routes to the existing "no signal · skip publish" path (H8).
+    market.checked_div(intrinsic).and_then(|q| Decimal::ONE.checked_sub(q))
 }
 
 /// Plausibility filter for raw discount samples.
@@ -75,6 +84,33 @@ mod tests {
             d, None,
             "zero intrinsic must NOT confirm a peg (discount 0)"
         );
+    }
+
+    /// Regression (audit 2026-06-19, F-12): a micro-but-nonzero intrinsic —
+    /// e.g. an xSOL NAV ≈ 1e-27 produced by a Hylo hyUSD undercollateralization
+    /// (CR<1) free-collateral rounding residual — makes `market / intrinsic`
+    /// overflow `Decimal::MAX`, which rust_decimal's `/` operator PANICS on.
+    /// `try_recompute` runs inline in the engine select loop with no
+    /// catch_unwind, so that panic would crash-loop the whole engine (no
+    /// monitoring for ANY asset) during exactly the depeg event the product
+    /// exists to catch. The division must be checked → None (skip), never panic.
+    #[test]
+    fn micro_nonzero_intrinsic_returns_none_not_panic() {
+        let intrinsic = Decimal::new(1, 27); // 1e-27, survives is_zero()
+        let market = Decimal::from(200); // a plausible xSOL USD price
+        // Before the fix this line panics with "Division overflowed".
+        let d = compute_discount(intrinsic, market, None, None, AssetClass::SynthLev);
+        assert_eq!(d, None, "overflowing discount must skip (None), not panic");
+        // Same on the LST SOL-denominated path: m_sol / i_sol = 200 / 1e-27 =
+        // 2e29 > Decimal::MAX → overflow → must skip, not panic.
+        let d_sol = compute_discount(
+            Decimal::from(200),
+            Decimal::from(200),
+            Some(Decimal::new(1, 27)),
+            Some(Decimal::from(200)),
+            AssetClass::Lst,
+        );
+        assert_eq!(d_sol, None, "overflowing SOL-path discount must skip, not panic");
     }
 
     #[test]
