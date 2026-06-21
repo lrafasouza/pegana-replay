@@ -32,7 +32,9 @@ pub fn compute_discount(
                 // Checked: a near-zero `i_sol` overflows Decimal on divide, which
                 // rust_decimal's `/` PANICS on — inline in the engine loop, that
                 // kills the whole process (audit F-12). None = skip (H8), never crash.
-                return m_sol.checked_div(i_sol).and_then(|q| Decimal::ONE.checked_sub(q));
+                return m_sol
+                    .checked_div(i_sol)
+                    .and_then(|q| Decimal::ONE.checked_sub(q));
             }
         }
     }
@@ -42,7 +44,9 @@ pub fn compute_discount(
     // runs inline in the engine select loop with no catch_unwind, so that panic
     // exits the process (crash-loop = monitoring blackout during a depeg, audit
     // F-12). None routes to the existing "no signal · skip publish" path (H8).
-    market.checked_div(intrinsic).and_then(|q| Decimal::ONE.checked_sub(q))
+    market
+        .checked_div(intrinsic)
+        .and_then(|q| Decimal::ONE.checked_sub(q))
 }
 
 /// Plausibility filter for raw discount samples.
@@ -98,7 +102,7 @@ mod tests {
     fn micro_nonzero_intrinsic_returns_none_not_panic() {
         let intrinsic = Decimal::new(1, 27); // 1e-27, survives is_zero()
         let market = Decimal::from(200); // a plausible xSOL USD price
-        // Before the fix this line panics with "Division overflowed".
+                                         // Before the fix this line panics with "Division overflowed".
         let d = compute_discount(intrinsic, market, None, None, AssetClass::SynthLev);
         assert_eq!(d, None, "overflowing discount must skip (None), not panic");
         // Same on the LST SOL-denominated path: m_sol / i_sol = 200 / 1e-27 =
@@ -110,7 +114,10 @@ mod tests {
             Some(Decimal::from(200)),
             AssetClass::Lst,
         );
-        assert_eq!(d_sol, None, "overflowing SOL-path discount must skip, not panic");
+        assert_eq!(
+            d_sol, None,
+            "overflowing SOL-path discount must skip, not panic"
+        );
     }
 
     #[test]

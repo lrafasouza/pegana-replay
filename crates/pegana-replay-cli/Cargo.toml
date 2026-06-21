@@ -1,12 +1,15 @@
 [package]
 name        = "pegana-replay-cli"
-# Tracks the methodology crate version (0.4.0): the CLI's verify-identity is
-# pegana_methodology::methodology_version(), so the published CLI version must
-# equal the methodology version it embeds. Engine now emits 0.4.0 receipts
-# (verified live 2026-06-16), so a v0.4.0 verifier RELEASE must be cut on
-# pegana-replay for the public to verify current receipts — see the release
-# runbook. Until then the installer still ships v0.2.0 (verifies older receipts).
-version     = "0.4.0"
+# CLI release version. The CLI's verify-IDENTITY is the embedded
+# `pegana_methodology::methodology_version()` (= 0.4.0), NOT this crate version —
+# verify() matches receipt.methodology_version against that embedded value.
+# v0.4.1 DELIBERATELY DECOUPLES the CLI release version from the methodology
+# version (F-13b, 2026-06-21): this binary embeds methodology 0.4.0 (so it
+# verifies ALL existing v1 history) AND adds schema-v2 re-derivation. Bumping
+# methodology itself would VERSION_MISMATCH every historical 0.4.0 receipt, so
+# methodology stays 0.4.0 and only the CLI patch-bumps. The installer fetches the
+# LATEST release (no longer methodology-pinned) so `curl|sh` ships this binary.
+version     = "0.4.1"
 edition     = "2021"
 description = "Verifies a Pegana alert's canonical receipt hash and its signer-pinned on-chain anchor — tamper-evidence without re-executing the methodology."
 license     = "MIT"

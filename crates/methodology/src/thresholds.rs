@@ -4,6 +4,24 @@ use pegana_common_verify::{AssetClass, PegState};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 
+/// Schmitt-trigger magnitude deadband for the spread (bps) path.
+///
+/// Enter a stricter state at the normal threshold; only relax once the smoothed
+/// discount falls below `threshold × (1 - DEADBAND_PCT%)`. Kills DRIFT↔PEGGED
+/// flapping when the discount sits near a threshold. 25% → e.g. drift=60bps
+/// enters at 60, exits at 45. See `classify_with_hysteresis` and ADR-0023.
+pub const DEADBAND_PCT: u32 = 25;
+
+/// CR-side Schmitt-trigger deadband for CR-driven assets (hyUSD).
+///
+/// A LOWER ratio is worse, so the exit band sits ABOVE the entry threshold:
+/// relax only once CR rises above `threshold × (1 + CR_DEADBAND_PCT%)`.
+/// Smaller than `DEADBAND_PCT` because CR thresholds are large (~130) — 2% ≈
+/// a 2.6pp band, which collapsed ~80% of hyUSD's boundary flapping in the
+/// calibration window (52 → ~10 transitions). See `classify_cr_with_hysteresis`
+/// and ADR-0023.
+pub const CR_DEADBAND_PCT: u32 = 2;
+
 /// Classes where only the DISCOUNT side (market < intrinsic/NAV) carries a
 /// risk signal:
 ///   - Yield-bearing stables (USDY/sUSD/syrupUSDC/sUSDe/ONyc/pbUSDC): market <

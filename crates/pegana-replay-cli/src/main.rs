@@ -18,7 +18,8 @@
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
 use pegana_methodology::{
-    canonical_assets_hash, canonical_receipt_hash, hex_sha256, methodology_version, Receipt,
+    canonical_assets_hash, canonical_receipt_hash, hex_sha256, methodology_version, rederive,
+    Receipt,
 };
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -150,8 +151,8 @@ async fn fetch_bundle(api_url: &str, alert_id: Uuid) -> Result<Receipt> {
 }
 
 fn verify(receipt: &Receipt, quiet: bool) -> Result<()> {
-    // 1) Schema version
-    if receipt.schema_version != "v1" {
+    // 1) Schema version — accept v1 (re-hash only) and v2 (re-hash + re-derive).
+    if !matches!(receipt.schema_version.as_str(), "v1" | "v2") {
         bail!("unsupported schema_version: {}", receipt.schema_version);
     }
 
@@ -170,7 +171,7 @@ fn verify(receipt: &Receipt, quiet: bool) -> Result<()> {
         std::process::exit(3);
     }
 
-    // 3) Verify canonical hashes
+    // 3) Verify canonical hashes — version-agnostic tamper-evidence (v1 and v2).
     let actual_assets_hash = canonical_assets_hash(&receipt.assets_toml_canonical)
         .map_err(|e| anyhow!("canonical_assets_hash failed: {e}"))?;
     let actual_assets_hex = hex_sha256(actual_assets_hash);
@@ -192,12 +193,43 @@ fn verify(receipt: &Receipt, quiet: bool) -> Result<()> {
         std::process::exit(1);
     }
 
+    // 4) Re-derivation check (v2 only). Re-hash passes → tamper-evidence holds.
+    //    Re-derivation additionally proves the frozen inputs actually produce the
+    //    recorded verdict — the Grant Thesis ("anyone can recompute our peg history").
+    //
+    //    v1 receipts are skipped: capture-ordering bugs (GAP-1/2/3) mean their
+    //    frozen ewma_prev / candidate_* / previous_state values are incorrect
+    //    post-mutation snapshots; re-derivation would produce spurious mismatches.
+    let rederived_note = if receipt.schema_version == "v2" {
+        let computed = &receipt.expected_computed;
+        let r = rederive(&receipt.inputs_frozen)
+            .map_err(|e| anyhow!("re-derivation error (frozen inputs inconsistent): {e}"))?;
+        if r.discount_raw != computed.discount_raw
+            || r.discount_smooth != computed.discount_smooth
+            || r.final_state != computed.final_state
+        {
+            eprintln!("FAIL  re-derivation mismatch");
+            eprintln!(
+                "  expected: discount_raw={} discount_smooth={} final_state={:?}",
+                computed.discount_raw, computed.discount_smooth, computed.final_state
+            );
+            eprintln!(
+                "  derived:  discount_raw={} discount_smooth={} final_state={:?}",
+                r.discount_raw, r.discount_smooth, r.final_state
+            );
+            std::process::exit(1);
+        }
+        " (re-derived)"
+    } else {
+        "" // v1: re-hash only
+    };
+
     if !quiet {
         let inputs = &receipt.inputs_frozen;
         let computed = &receipt.expected_computed;
         println!(
-            "PASS  {}  {:?} -> {:?}  @ {}",
-            inputs.asset, inputs.previous_state, computed.final_state, inputs.now
+            "PASS  {}  {:?} -> {:?}  @ {}{}",
+            inputs.asset, inputs.previous_state, computed.final_state, inputs.now, rederived_note
         );
         println!(
             "      methodology v{}, assets_toml sha256:{}",
@@ -231,10 +263,7 @@ async fn verify_onchain(
         .with_context(|| format!("GET {}", url))?;
     if resp.status() == 404 {
         // Parse commit_status to decide whether silence is safe.
-        let body_404: serde_json::Value = resp
-            .json()
-            .await
-            .unwrap_or(serde_json::Value::Null);
+        let body_404: serde_json::Value = resp.json().await.unwrap_or(serde_json::Value::Null);
         let status = body_404["commit_status"].as_str().unwrap_or("unknown");
         if onchain_skip_is_ok(status) {
             if !quiet {
@@ -428,7 +457,198 @@ async fn verify_onchain(
 
 #[cfg(test)]
 mod tests {
-    use super::{onchain_signer_ok, onchain_skip_is_ok};
+    use super::{onchain_signer_ok, onchain_skip_is_ok, verify};
+    use chrono::DateTime;
+    use pegana_common_verify::{AssetClass, PegState};
+    use pegana_methodology::{
+        canonical_assets_hash, canonical_receipt_hash, hex_sha256, methodology_version,
+        receipt::{Computed, InputsFrozen, PythEntry},
+        Receipt,
+    };
+    use rust_decimal::Decimal;
+    use std::collections::HashMap;
+    use std::str::FromStr;
+
+    // ── helper: build a syntactically-valid receipt with a correct hash ──────
+
+    fn stub_inputs(previous_state: PegState) -> InputsFrozen {
+        InputsFrozen {
+            asset: "USDC".into(),
+            class: AssetClass::StableFiat,
+            now: DateTime::from_timestamp(1_704_067_200, 0).unwrap(),
+            alpha: Decimal::from_str("0.3").unwrap(),
+            intrinsic_usd: Decimal::ONE,
+            market_usd: Decimal::from_str("0.999").unwrap(), // 10bps discount, under drift(20)
+            intrinsic_sol: None,
+            market_sol: None,
+            ewma_prev: None,
+            hyusd_cr: None,
+            previous_state,
+            candidate_state: None,
+            candidate_since: None,
+            thresholds: {
+                let mut m = HashMap::new();
+                m.insert("drift".into(), 20u32);
+                m.insert("depeg".into(), 100u32);
+                m.insert("critical".into(), 300u32);
+                m
+            },
+            threshold_kind: "bps".into(),
+            pyth_entries: HashMap::<String, PythEntry>::new(),
+            confirm_up_secs: 30,
+            decay_down_secs: 120,
+        }
+    }
+
+    fn stub_computed() -> Computed {
+        Computed {
+            // discount = 1 - 0.999/1.0 = 0.001 = 10bps, under drift(20) → Pegged
+            discount_raw: Decimal::from_str("0.001").unwrap(),
+            discount_smooth: Decimal::from_str("0.001").unwrap(), // cold-start seeds at raw
+            final_state: PegState::Pegged,
+            confidence_label: "high".into(),
+        }
+    }
+
+    const STUB_TOML: &str = "[[assets]]\nsymbol = \"USDC\"\n";
+
+    fn make_receipt(schema_version: &str, inputs: InputsFrozen, computed: Computed) -> Receipt {
+        let method_ver = methodology_version();
+        // assets_hash is recomputed internally by verify(); we don't store it in
+        // the Receipt struct. Computing it here only to validate STUB_TOML is parseable.
+        let _assets_hash = canonical_assets_hash(STUB_TOML)
+            .map(hex_sha256)
+            .expect("canonical_assets_hash failed on STUB_TOML");
+        let receipt_hash = canonical_receipt_hash(method_ver, None, STUB_TOML, &inputs, &computed)
+            .map(hex_sha256)
+            .expect("canonical_receipt_hash failed");
+        Receipt {
+            schema_version: schema_version.into(),
+            methodology_version: method_ver.to_string(),
+            methodology_git_sha: None,
+            assets_toml_canonical: STUB_TOML.into(),
+            inputs_frozen: inputs,
+            expected_computed: computed,
+            expected_receipt_sha256: receipt_hash,
+        }
+    }
+
+    // ── v2 receipt: happy-path round-trip ────────────────────────────────────
+
+    /// A v2 receipt with correct inputs and hash must verify (PASS).
+    #[test]
+    fn v2_receipt_verify_pass() {
+        let receipt = make_receipt("v2", stub_inputs(PegState::Pegged), stub_computed());
+        // verify() calls std::process::exit on failure, so this returning Ok is
+        // proof the path succeeded.
+        assert!(verify(&receipt, true).is_ok());
+    }
+
+    /// A v1 receipt passes verify (re-hash only, no re-derive).
+    #[test]
+    fn v1_receipt_verify_pass_no_rederive() {
+        let receipt = make_receipt("v1", stub_inputs(PegState::Pegged), stub_computed());
+        assert!(verify(&receipt, true).is_ok());
+    }
+
+    /// An unknown schema_version returns an error (not process::exit).
+    #[test]
+    fn unknown_schema_version_returns_err() {
+        let receipt = make_receipt("v3", stub_inputs(PegState::Pegged), stub_computed());
+        let result = verify(&receipt, true);
+        assert!(result.is_err(), "unknown schema_version must error");
+        let msg = format!("{:?}", result.unwrap_err());
+        assert!(
+            msg.contains("unsupported schema_version"),
+            "wrong error: {}",
+            msg
+        );
+    }
+
+    /// A v2 receipt where expected_computed disagrees with what rederive produces
+    /// — but the hash was computed over the dishonest computed — causes exit(1).
+    ///
+    /// This is the real attack re-derivation defends against: someone who
+    /// controls the server could fabricate a receipt where the stated final_state
+    /// is "PEGGED" but the inputs actually derive to "DRIFT". The hash covers
+    /// the (inputs, computed) pair consistently, so re-hash alone passes. Only
+    /// re-derivation catches this.
+    ///
+    /// We test this by passing a computed whose final_state = Pegged but whose
+    /// inputs (11bps discount, no prior) actually rederive to Pegged too — we
+    /// need to find an input combination where the hash-consistent pair passes
+    /// re-hash but fails re-derive. The approach: build inputs with a 30bps
+    /// discount (crosses drift=20 → rederive → Pegged because timer started,
+    /// new candidate), and a matching honest computed (final_state=Pegged).
+    /// Then modify the computed's final_state to Drift while keeping the receipt
+    /// hash consistent with that MODIFIED pair — this makes re-hash pass but
+    /// re-derive fail (rederive returns Pegged, stored says Drift).
+    ///
+    /// NOTE: because process::exit can't be caught in a unit test, we cannot
+    /// call `verify()` directly for the exit-1 path. Instead we isolate the
+    /// re-derive logic separately, which is the correct approach.
+    #[test]
+    fn v2_receipt_rederive_mismatch_is_detectable() {
+        use pegana_methodology::rederive;
+        // inputs: 10bps discount, cold-start, no EWMA prior → rederive produces
+        // discount_raw=0.001, smooth=0.001, final_state=Pegged.
+        let inputs = stub_inputs(PegState::Pegged);
+        let honest_computed = stub_computed(); // final_state=Pegged (matches rederive)
+
+        // A dishonest computed: claims Drift even though inputs rederive to Pegged.
+        let dishonest_computed = Computed {
+            discount_raw: honest_computed.discount_raw,
+            discount_smooth: honest_computed.discount_smooth,
+            final_state: PegState::Drift, // WRONG — inputs rederive to Pegged
+            confidence_label: "high".into(),
+        };
+
+        // Build a hash-consistent pair over the DISHONEST computed (so re-hash passes).
+        let method_ver = methodology_version();
+        let dishonest_hash =
+            canonical_receipt_hash(method_ver, None, STUB_TOML, &inputs, &dishonest_computed)
+                .map(hex_sha256)
+                .expect("hash");
+
+        let dishonest_receipt = Receipt {
+            schema_version: "v2".into(),
+            methodology_version: method_ver.to_string(),
+            methodology_git_sha: None,
+            assets_toml_canonical: STUB_TOML.into(),
+            inputs_frozen: inputs.clone(),
+            expected_computed: dishonest_computed.clone(),
+            expected_receipt_sha256: dishonest_hash,
+        };
+
+        // Re-hash of dishonest_receipt would PASS (hash is consistent with (inputs, dishonest_computed)).
+        // Re-derivation MUST produce Pegged (not Drift) — proving the mismatch is detectable.
+        let rederived = rederive(&dishonest_receipt.inputs_frozen).expect("rederive");
+        assert_eq!(
+            rederived.final_state,
+            PegState::Pegged,
+            "rederive must return Pegged (inputs are 10bps → no drift)"
+        );
+        assert_ne!(
+            rederived.final_state, dishonest_receipt.expected_computed.final_state,
+            "dishonest computed claims Drift but rederive says Pegged — mismatch is caught"
+        );
+
+        // For completeness: the re-hash check alone passes on the dishonest receipt.
+        // This confirms re-derivation is the ONLY check that catches this attack.
+        let actual_hash = canonical_receipt_hash(
+            method_ver,
+            None,
+            STUB_TOML,
+            &dishonest_receipt.inputs_frozen,
+            &dishonest_receipt.expected_computed,
+        )
+        .map(hex_sha256)
+        .expect("hash");
+        assert_eq!(
+            actual_hash, dishonest_receipt.expected_receipt_sha256,
+            "re-hash passes on dishonest receipt — only rederive catches the attack"
+        );
+    }
 
     const SIGNER: &str = "7PpoyumFQMmcWzhJxDYr6iPv1fjYN41KBTA8xKKzu7R9";
     const OTHER_SIGNER: &str = "So11111111111111111111111111111111111111112";
@@ -517,7 +737,13 @@ mod tests {
     #[test]
     fn onchain_404_pending_is_not_a_pass() {
         assert!(onchain_skip_is_ok("not_applicable"));
-        for s in ["pending", "retry_exhausted", "wallet_drained", "persistence_failed", "unknown"] {
+        for s in [
+            "pending",
+            "retry_exhausted",
+            "wallet_drained",
+            "persistence_failed",
+            "unknown",
+        ] {
             assert!(!onchain_skip_is_ok(s), "status {s} must not pass silently");
         }
     }
