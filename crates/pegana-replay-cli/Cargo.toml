@@ -11,7 +11,7 @@ name        = "pegana-replay-cli"
 # LATEST release (no longer methodology-pinned) so `curl|sh` ships this binary.
 version     = "0.4.1"
 edition     = "2021"
-description = "Verifies a Pegana alert's canonical receipt hash and its signer-pinned on-chain anchor — tamper-evidence without re-executing the methodology."
+description = "Verifies a Pegana alert's canonical receipt hash and its signer-pinned on-chain anchor (tamper-evidence for every receipt), and independently re-derives the verdict from the frozen inputs for schema-v2 receipts."
 license     = "MIT"
 repository  = "https://github.com/lrafasouza/pegana-replay"
 keywords    = ["pegana", "audit", "verify", "solana"]
