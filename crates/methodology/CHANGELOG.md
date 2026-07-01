@@ -1,5 +1,17 @@
 # pegana-methodology changelog
 
+## 0.5.0 — 2026-07-01
+
+Behavior change (MINOR). Intrinsic-sanity guard —
+`discount_sanity_violated` + `NAV_DISCOUNT_SANITY_BPS = 3000`. Mirror of the
+0.4.0 NAV premium-sanity on the DISCOUNT side: a garbage-HIGH intrinsic (>30%
+discount on a direction-sensitive class) is a broken NAV anchor, published as
+honest-dark UNKNOWN instead of a false CRITICAL/BLACK_SWAN (JLP 2026-06-24: RR
+feed printed 21817 vs 3.41). Verdict-affecting only for >30%-discount garbage
+prints; provably inert on the live universe (max real direction-sensitive
+discount = 245 bps) and on the 2025-10-10 backtest. Not ADR-0024 (single-sample
+magnitude, not constancy). See ADR-0030.
+
 ## 0.4.0 — 2026-06-15
 
 Behavior change (MINOR) — the "validation follow-ups" cluster (ADR-0025).

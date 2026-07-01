@@ -72,6 +72,39 @@ pub fn premium_sanity_violated(class: AssetClass, discount: Decimal) -> bool {
     discount.abs() * Decimal::from(10_000u32) > Decimal::from(NAV_PREMIUM_SANITY_BPS)
 }
 
+/// Maximum plausible DISCOUNT (market below NAV/intrinsic — a *positive* discount) for a
+/// direction-sensitive / NAV-anchored class before the intrinsic itself is judged broken
+/// (garbage-HIGH NAV print) rather than the market having genuinely repriced the asset down.
+///
+/// Mirror of [`NAV_PREMIUM_SANITY_BPS`] on the discount side. Premium cap catches a garbage-LOW
+/// intrinsic (market far "above" it → false PEGGED); this catches a garbage-HIGH intrinsic (market
+/// far "below" it → false CRITICAL/BLACK_SWAN). Incident 2026-06-24: JLP's `JLP/USD.RR` Pyth feed
+/// printed 21817.55 vs a correct 3.41 (~6400× garbage) → discount 0.9998 (9998 bps) → false
+/// BLACK_SWAN to egress; it slipped `is_plausible_discount_sample` (0.9998 < 1.0) AND
+/// `premium_sanity_violated` (fires only when discount < 0).
+///
+/// Bound = 3000 bps (30%). REAL yield/LST depegs are bounded well below this: stETH −7% (2022),
+/// ezETH low-double-digits — real breaks live in the 5–25% band and STILL classify (DEPEG/CRITICAL)
+/// on the normal bands. The widest legitimate critical BAND on any tracked asset is JLP's
+/// critical = 1500 bps; 3000 = 2× that, i.e. at/beyond the BLACK_SWAN entry (2×critical) of even the
+/// widest-banded asset, so nothing a calibrated asset reaches in a real depeg is touched. A 30–99.98%
+/// "discount" is not a realizable market price for a NAV-anchored token — it is a broken anchor.
+/// Magnitude check on ONE smoothed sample, NOT the discount-constancy freeze detector rejected in
+/// ADR-0024.
+pub const NAV_DISCOUNT_SANITY_BPS: u32 = 3000;
+
+/// True when `discount` is a discount (positive) on a direction-sensitive / NAV-anchored class whose
+/// magnitude exceeds [`NAV_DISCOUNT_SANITY_BPS`] — i.e. the intrinsic/NAV anchor is almost certainly
+/// a garbage-HIGH print and the resulting false CRITICAL/BLACK_SWAN must become UNKNOWN instead. The
+/// premium (negative) side and symmetric classes return false: a real market-below-NAV depeg inside
+/// the band still classifies normally.
+pub fn discount_sanity_violated(class: AssetClass, discount: Decimal) -> bool {
+    if !(is_direction_sensitive(class) && discount > Decimal::ZERO) {
+        return false;
+    }
+    discount.abs() * Decimal::from(10_000u32) > Decimal::from(NAV_DISCOUNT_SANITY_BPS)
+}
+
 /// Direction-aware variant of `state_for_bps_discount`. For classes where
 /// only one side of the spread carries information (currently just
 /// `stable_yield`), a premium (negative discount) is normalized to PEGGED.
@@ -742,6 +775,47 @@ mod tests {
             AssetClass::StableFiat,
             Decimal::from_str("-0.30").unwrap()
         ));
+    }
+
+    #[test]
+    fn discount_sanity_flags_garbage_high_intrinsic() {
+        // JLP incident: intrinsic 21817.55, market 3.41 -> discount 0.9998.
+        assert!(discount_sanity_violated(
+            AssetClass::StableYield,
+            Decimal::from_str("0.9998").unwrap()
+        ));
+        assert!(discount_sanity_violated(
+            AssetClass::Lst,
+            Decimal::from_str("0.3001").unwrap()
+        ));
+    }
+
+    #[test]
+    fn discount_sanity_allows_real_depegs() {
+        assert!(!discount_sanity_violated(
+            AssetClass::Lst,
+            Decimal::from_str("0.07").unwrap()
+        )); // stETH -7%
+        assert!(!discount_sanity_violated(
+            AssetClass::StableYield,
+            Decimal::from_str("0.25").unwrap()
+        )); // 25% break
+        assert!(!discount_sanity_violated(
+            AssetClass::Lst,
+            Decimal::from_str("0.30").unwrap()
+        )); // exactly 30% still classifies (strict >)
+    }
+
+    #[test]
+    fn discount_sanity_ignores_premium_and_symmetric() {
+        assert!(!discount_sanity_violated(
+            AssetClass::StableYield,
+            Decimal::from_str("-0.30").unwrap()
+        )); // premium side = premium_sanity's job
+        assert!(!discount_sanity_violated(
+            AssetClass::StableFiat,
+            Decimal::from_str("0.30").unwrap()
+        )); // symmetric class: real 30% break stays CRITICAL/BLACK_SWAN
     }
 
     // ── Proptest helpers ──────────────────────────────────────────────────────

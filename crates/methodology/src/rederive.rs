@@ -9,7 +9,7 @@
 //!
 //! - `discount_raw` — compute_discount from frozen intrinsic/market prices.
 //! - `discount_smooth` — one EWMA step from frozen `ewma_prev` + frozen `alpha`.
-//! - `final_state` — classify then transition then premium-sanity override.
+//! - `final_state` — classify then transition then NAV-sanity override.
 //!
 //! # What is NOT re-derived (intentionally deferred)
 //!
@@ -30,8 +30,8 @@
 
 use crate::{
     apply_ewma_pure, classify_cr_with_hysteresis, classify_with_hysteresis, compute_discount,
-    is_plausible_discount_sample, premium_sanity_violated, receipt::InputsFrozen,
-    transition_decide, CR_DEADBAND_PCT, DEADBAND_PCT,
+    discount_sanity_violated, is_plausible_discount_sample, premium_sanity_violated,
+    receipt::InputsFrozen, transition_decide, CR_DEADBAND_PCT, DEADBAND_PCT,
 };
 use pegana_common_verify::PegState;
 use rust_decimal::Decimal;
@@ -61,7 +61,7 @@ pub enum MethodologyRederiveError {
 ///
 /// Covers the three deterministic outputs: the raw discount, the EWMA-smoothed
 /// discount, and the final peg state after classification, time-hysteresis, and
-/// the premium-sanity override. `confidence_label` is intentionally absent — see
+/// the NAV-sanity override. `confidence_label` is intentionally absent — see
 /// module-level docs.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Rederived {
@@ -78,7 +78,7 @@ pub struct Rederived {
 /// 3. `apply_ewma_pure` → `discount_smooth`
 /// 4. `classify_with_hysteresis` / `classify_cr_with_hysteresis` → `candidate`
 /// 5. `transition_decide` → `final_state`
-/// 6. `premium_sanity_violated` override → `Unknown`
+/// 6. `premium_sanity_violated` / `discount_sanity_violated` override → `Unknown`
 ///
 /// # GAP-3 / `previous_state` semantics
 ///
@@ -156,10 +156,14 @@ pub fn rederive(inputs: &InputsFrozen) -> Result<Rederived, MethodologyRederiveE
     );
     let mut final_state = decision.new_last_state;
 
-    // Step 6: premium-sanity override. Mirrors the `premium_sanity_violated`
+    // Step 6: NAV-sanity override. Mirrors the premium/discount sanity
     // block in `try_recompute` (after `transition`, same engine ordering):
-    // `if premium_sanity_violated(asset_cfg.class, new_smooth) { final_state = Unknown }`.
-    if premium_sanity_violated(inputs.class, discount_smooth) {
+    // `if *_sanity_violated(asset_cfg.class, new_smooth) { final_state = Unknown }`.
+    // state_reason is out-of-hash (only final_state matters for re-derivation), so
+    // both sanity violations collapse to the same Unknown here.
+    if premium_sanity_violated(inputs.class, discount_smooth)
+        || discount_sanity_violated(inputs.class, discount_smooth)
+    {
         final_state = PegState::Unknown;
     }
 
@@ -335,6 +339,35 @@ mod tests {
         inputs.market_sol = None;
         let r = rederive(&inputs).expect("should succeed");
         assert_eq!(r.final_state, PegState::Unknown);
+    }
+
+    #[test]
+    fn discount_sanity_override_to_unknown() {
+        let mut inputs = base_inputs(AssetClass::StableYield, "bps");
+        // JLP incident: intrinsic 21817.55, market 3.41 -> discount ≈ 0.9998.
+        inputs.intrinsic_usd = Decimal::from_str("21817.55").unwrap();
+        inputs.market_usd = Decimal::from_str("3.41").unwrap();
+        inputs.intrinsic_sol = None;
+        inputs.market_sol = None;
+        let r = rederive(&inputs).expect("should succeed");
+        assert_eq!(r.final_state, PegState::Unknown);
+    }
+
+    #[test]
+    fn discount_sanity_allows_real_depeg_to_classify() {
+        let mut inputs = base_inputs(AssetClass::StableYield, "bps");
+        inputs.intrinsic_usd = Decimal::from_str("1.0").unwrap();
+        inputs.market_usd = Decimal::from_str("0.85").unwrap();
+        inputs.intrinsic_sol = None;
+        inputs.market_sol = None;
+        inputs.thresholds.insert("drift".into(), 500);
+        inputs.thresholds.insert("depeg".into(), 1000);
+        inputs.thresholds.insert("critical".into(), 1500);
+        inputs.thresholds.insert("black_swan".into(), 3000);
+        inputs.candidate_state = Some(PegState::Critical);
+        inputs.candidate_since = Some(fixed_now() - Duration::seconds(31));
+        let r = rederive(&inputs).expect("should succeed");
+        assert_eq!(r.final_state, PegState::Critical);
     }
 
     // (f) Cold-start: previous_state = Pegged (default), candidate_state = None.

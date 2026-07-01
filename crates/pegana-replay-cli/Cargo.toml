@@ -1,15 +1,14 @@
 [package]
 name        = "pegana-replay"
 # CLI release version. The CLI's verify-IDENTITY is the embedded
-# `pegana_methodology::methodology_version()` (= 0.4.0), NOT this crate version —
-# verify() matches receipt.methodology_version against that embedded value.
-# v0.4.1 DELIBERATELY DECOUPLES the CLI release version from the methodology
-# version (F-13b, 2026-06-21): this binary embeds methodology 0.4.0 (so it
-# verifies ALL existing v1 history) AND adds schema-v2 re-derivation. Bumping
-# methodology itself would VERSION_MISMATCH every historical 0.4.0 receipt, so
-# methodology stays 0.4.0 and only the CLI patch-bumps. The installer fetches the
-# LATEST release (no longer methodology-pinned) so `curl|sh` ships this binary.
-version     = "0.4.1"
+# `pegana_methodology::methodology_version()` — verify() matches
+# receipt.methodology_version against that embedded value, else exit(3)
+# VERSION_MISMATCH (no in-binary multi-version dispatch — ADR-0028).
+# v0.4.2 (2026-07-01) embeds methodology 0.5.0 (intrinsic-sanity, ADR-0030) so it
+# verifies 0.5.0 receipts. To verify a historical 0.4.0 receipt, pin the matching
+# CLI (`cargo install pegana-replay@0.4.1`). The installer fetches the LATEST
+# release so `curl|sh` ships this (0.5.0) binary; older receipts need the pin.
+version     = "0.4.2"
 edition     = "2021"
 description = "Verifies a Pegana alert's canonical receipt hash and its signer-pinned on-chain anchor (tamper-evidence for every receipt), and independently re-derives the verdict from the frozen inputs for schema-v2 receipts."
 license     = "MIT"
@@ -27,7 +26,7 @@ name = "pegana-replay"
 path = "src/main.rs"
 
 [dependencies]
-pegana-methodology   = { path = "../methodology", version = "0.4.0" }
+pegana-methodology   = { path = "../methodology", version = "0.5.0" }
 # Public carve-out (replaces pegana-common). The replay CLI only touches the
 # verifier-safe types (AssetsFile parsing, AlertEvidence deserialization);
 # server-side primitives stay in the closed pegana-common crate.

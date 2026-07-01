@@ -11,6 +11,8 @@
 /// `'premium_sanity'` which must stay identical to this const.
 pub const STATE_REASON_PREMIUM_SANITY: &str = "premium_sanity";
 
+pub const STATE_REASON_DISCOUNT_SANITY: &str = "discount_sanity";
+
 /// Synthesized by the API layer (not the engine) when the most-recent
 /// discount snapshot is older than 15 minutes (stale feed). The state is
 /// collapsed from the stored value to UNKNOWN. The API SQL uses the string
@@ -34,10 +36,10 @@ pub use ewma::apply_ewma_pure;
 pub use receipt::{Computed, InputsFrozen, PythEntry, Receipt};
 pub use rederive::{rederive, MethodologyRederiveError, Rederived};
 pub use thresholds::{
-    classify_cr_with_hysteresis, classify_with_hysteresis, is_direction_sensitive,
-    next_worse_cr_band, premium_sanity_violated, state_for_bps_discount,
+    classify_cr_with_hysteresis, classify_with_hysteresis, discount_sanity_violated,
+    is_direction_sensitive, next_worse_cr_band, premium_sanity_violated, state_for_bps_discount,
     state_for_bps_discount_aware, state_for_cr, CR_DEADBAND_PCT, DEADBAND_PCT,
-    NAV_PREMIUM_SANITY_BPS,
+    NAV_DISCOUNT_SANITY_BPS, NAV_PREMIUM_SANITY_BPS,
 };
 pub use transition::{transition_decide, TransitionDecision};
 pub use version::{methodology_git_sha, methodology_version};
