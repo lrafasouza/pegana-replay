@@ -696,8 +696,14 @@ token_program = "token_2022"
 class = "stable_fiat"
 peg_target = "USD"
 intrinsic = { kind = "fixed_1_usd" }
-market = { kind = "pyth_spot", feed = "USDu/USD" }
-pyth_feed_id = "0x9c26b01925ed603f7c90deb29cd88751c580436333a7dca20a64a2c63785f502"
+# Market source switched pyth_spot -> jupiter_usd on 2026-07-01: the Pyth
+# USDu/USD feed is DEAD (last publish ~179 days ago, 258019 min — verified via
+# hermes.pyth.network), so the asset read null/dark on every surface. USDu IS
+# Jupiter-tradable (1 USDu -> 0.9984 USDC, priceImpact 0.0002% — deep pool),
+# so route the market leg through Jupiter like CASH. pyth_feed_id cleared (the
+# dead feed is no cross-check); numeraire USDC/USD keeps a live Pyth dependency.
+market = { kind = "jupiter_usd", numeraire = "USDC", numeraire_feed = "USDC/USD" }
+pyth_feed_id = ""
 thresholds_bps = { drift = 25, depeg = 100, critical = 300 }
 
 [[assets]]
