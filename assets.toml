@@ -48,10 +48,6 @@ market         = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SO
 pyth_feed_id   = "0xc2289a6a43d2ce91c6f55caec370f4acc38a2ed477f58813334c6d03749ff2a4"
 # Calibrated 2026-05-25 from 24h p99 ~33 bps.
 thresholds_bps = { drift = 40, depeg = 100, critical = 250 }
-# monitoring-only per ADR-0015 on 2026-06-10 — calibration v1: p95 48.5 bps > drift 40,
-# 0 transitions. 24h-sampled band too tight vs the 12.8d window. Stays active+monitored
-# but excluded from the launch verdict. Re-calibrate (drift→~61) + re-promote post-launch
-# after a clean 7-day run. See docs/CALIBRATION-v1.md.
 
 [[assets]]
 symbol         = "bSOL"
@@ -82,9 +78,6 @@ market         = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SO
 pyth_feed_id   = "0xf51570985c642c49c2d6e50156390fdba80bb6d5f7fa389d2f012ced4f7d208f"
 # Calibrated 2026-05-25 from 24h p99 ~112 bps — INF runs hot vs the rest.
 thresholds_bps = { drift = 140, depeg = 280, critical = 560 }
-# monitoring-only per ADR-0015 on 2026-06-10 — calibration v1: p95 146.2 bps > drift 140,
-# 0 transitions. 24h-sampled band too tight. Stays active+monitored, excluded from the
-# launch verdict. Re-calibrate (drift→~183) + re-promote post-launch. See docs/CALIBRATION-v1.md.
 
 # Drift protocol was exploited 2026-04-01 ($285M, DPRK-linked admin key
 # compromise). TVL collapsed from $550M to <$10M; protocol is permanently
@@ -107,9 +100,6 @@ market         = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SO
 pyth_feed_id   = "0x2997d5f9e96563cef9151cffc4580803930826fa38c4af5062de2363720769ea"
 # Calibrated 2026-05-25 from 24h p99 ~35 bps.
 thresholds_bps = { drift = 45, depeg = 110, critical = 250 }
-# monitoring-only per ADR-0015 on 2026-06-10 — calibration v1: p95 50.2 bps > drift 45,
-# 0 transitions. 24h-sampled band too tight. Stays active+monitored, excluded from the
-# launch verdict. Re-calibrate (drift→~63) + re-promote post-launch. See docs/CALIBRATION-v1.md.
 
 [[assets]]
 symbol         = "JupSOL"
@@ -245,9 +235,6 @@ market         = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SO
 pyth_feed_id   = ""   # no Pyth feed — Sanctum is the source of truth
 # Calibrated 2026-05-25 from 24h p99 ~44 bps.
 thresholds_bps = { drift = 55, depeg = 140, critical = 280 }
-# monitoring-only per ADR-0015 on 2026-06-10 — calibration v1: p95 59.7 bps > drift 55,
-# 2 transitions (<3). 24h-sampled band too tight. Stays active+monitored, excluded from the
-# launch verdict. Re-calibrate (drift→~75) + re-promote post-launch. See docs/CALIBRATION-v1.md.
 
 [[assets]]
 symbol         = "hyloSOL+"
@@ -537,7 +524,7 @@ market         = { kind = "jupiter_usd", numeraire = "USDC", numeraire_feed = "U
 pyth_feed_id   = "0x8ed858a2214e892c9371694fb6c8a9037b6ed4052c4edf209f8cb988484e81d9"
 # Mirrors USDe thresholds given similar delta-neutral mechanism.
 thresholds_bps = { drift = 25, depeg = 100, critical = 300 }
-active         = true                 # activated 2026-06-11 by owner override; monitoring-grade until tuned
+active         = true                 # calibrated 2026-07-01 (migration 0060; was Phase-0 monitoring-grade)
 
 [[assets]]
 symbol         = "JLP"
@@ -604,7 +591,7 @@ market         = { kind = "jupiter_usd", numeraire = "USDC", numeraire_feed = "U
 # Mainnet Pyth feed Crypto.EURC/USD confirmed via hermes.pyth.network 2026-05-28.
 pyth_feed_id   = "0x76fa85158bf14ede77087fe3ae472f66213f6ea2f5b411cb2de472794990fa5c"
 thresholds_bps = { drift = 20, depeg = 75, critical = 250 }
-active         = true                 # activated 2026-06-11 by owner override; monitoring-grade until tuned
+active         = true                 # calibrated 2026-07-01 (migration 0060; was Phase-0 monitoring-grade)
 
 [[assets]]
 symbol         = "dzSOL"
