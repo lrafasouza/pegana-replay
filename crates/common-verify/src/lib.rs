@@ -447,6 +447,7 @@ mod tests {
     /// double-purposes as a regression test for AssetsFile field shapes
     /// when adding new IntrinsicStrategy / MarketStrategy variants.
     #[test]
+    #[cfg(feature = "workspace-tests")]
     fn assets_toml_parses() {
         let raw = include_str!("../../../assets.toml");
         let parsed: AssetsFile = toml::from_str(raw).expect("assets.toml is valid");

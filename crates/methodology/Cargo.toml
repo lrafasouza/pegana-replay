@@ -11,7 +11,7 @@ repository  = "https://github.com/lrafasouza/pegana-replay"
 # still get these same types via `pub use pegana_common_verify::*` in
 # pegana-common's lib.rs — methodology depends on the carved crate directly
 # so this source tree mirrors cleanly to the public pegana-replay repo.
-pegana-common-verify       = { path = "../common-verify" }
+pegana-common-verify       = { path = "../common-verify", version = "0.1.0" }
 rust_decimal               = { workspace = true }
 serde                      = { workspace = true }
 serde_json                 = { workspace = true }

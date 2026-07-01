@@ -1,5 +1,5 @@
 [package]
-name        = "pegana-replay-cli"
+name        = "pegana-replay"
 # CLI release version. The CLI's verify-IDENTITY is the embedded
 # `pegana_methodology::methodology_version()` (= 0.4.0), NOT this crate version —
 # verify() matches receipt.methodology_version against that embedded value.
@@ -21,12 +21,16 @@ categories  = ["command-line-utilities"]
 name = "pegana-replay"
 path = "src/main.rs"
 
+[features]
+# Enables tests that read files from the workspace root. Off by default.
+workspace-tests = []
+
 [dependencies]
-pegana-methodology   = { path = "../methodology" }
+pegana-methodology   = { path = "../methodology", version = "0.4.0" }
 # Public carve-out (replaces pegana-common). The replay CLI only touches the
 # verifier-safe types (AssetsFile parsing, AlertEvidence deserialization);
 # server-side primitives stay in the closed pegana-common crate.
-pegana-common-verify = { path = "../common-verify" }
+pegana-common-verify = { path = "../common-verify", version = "0.1.0" }
 clap               = { version = "4", features = ["derive", "env"] }
 reqwest            = { workspace = true }
 serde              = { workspace = true }

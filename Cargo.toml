@@ -83,4 +83,4 @@ publish-jobs          = []
 github-attestations   = true   # Sigstore via GitHub OIDC
 
 [workspace.metadata.dist.publish-binaries]
-"pegana-replay-cli" = ["pegana-replay"]
+"pegana-replay" = ["pegana-replay"]
