@@ -452,7 +452,7 @@ peg_target     = "USD"
 # (same property as hyloSOL+). Contained pending a reliable market/depth source
 # (liquidity gate, TIER 2). See ADR-0024.
 intrinsic      = { kind = "pyth_redemption_rate", feed = "ONYC/USD.NAV" }
-market         = { kind = "dex_screener_usd" }   # DexScreener top-liquidity pair (Orca pool ~$5.1M liquidity)
+market         = { kind = "jupiter_usd", numeraire = "USDC", numeraire_feed = "USDC/USD" }   # switched from dex_screener 2026-07-01 (deep on Jupiter; USDu pattern)
 pyth_feed_id   = ""
 # Wider thresholds — ONyc NAV drifts upward by design; large negative gap
 # means a redemption arbitrage opportunity rather than a peg break.
@@ -745,7 +745,9 @@ token_program = "spl"
 class = "stable_yield"
 peg_target = "USD"
 intrinsic = { kind = "pyth_redemption_rate", feed = "PST/USDC.RR" }
-market = { kind = "dex_screener_usd" }
+# Market switched dex_screener_usd -> jupiter_usd 2026-07-01: PST is DEEP on Jupiter ($1k/$10k
+# impact 0.02%) but the DexScreener "top pair" is thin-print-prone (14x flap 2026-06-24). USDu pattern.
+market = { kind = "jupiter_usd", numeraire = "USDC", numeraire_feed = "USDC/USD" }
 pyth_feed_id = ""
 thresholds_bps = { drift = 30, depeg = 100, critical = 250 }
 
