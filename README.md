@@ -10,6 +10,25 @@ how anyone outside Pegana can verify a Pegana alert's canonical receipt hash
 and its signer-pinned on-chain anchor, confirming the published history wasn't
 altered (tamper-evidence).
 
+## Verify a Pegana alert in 60 seconds
+
+**Option A — install the CLI (crates.io):**
+```sh
+cargo install pegana-replay
+pegana-replay --alert-id <UUID>     # an alert id from pegana.xyz or the API
+# → PASS  receipt_sha256 matches   (tamper-evidence: the published history wasn't altered)
+```
+Or verify a saved bundle offline: `pegana-replay --bundle <path-to-replay-bundle.json>`.
+
+**Option B — no install, verify in your browser:**
+Open the audit page for any alert — `https://www.pegana.xyz/audit/<alert-id>` — where the in-browser
+verifier (`ReceiptVerifier`) recomputes the canonical receipt hash in pure JS (byte-identical to the
+CLI), trusting nothing from our servers.
+
+**What PASS means:** the `receipt_sha256` you recomputed equals the published one → the verdict and its
+inputs were not altered after the fact. For schema-v2 receipts the CLI also re-derives the verdict from
+the frozen inputs (not just the hash).
+
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf \
   https://releases.pegana.xyz/pegana-replay-installer.sh | sh
@@ -67,14 +86,15 @@ gh attestation verify ~/.pegana/bin/pegana-replay \
 
 ## Versioning
 
-- The CLI's release tag **equals the methodology version it embeds**: `v0.2.0`
-  ships methodology 0.2.0. A receipt's `methodology_version` field maps
-  directly to a release tag, so anyone reading a 6-month-old receipt can check
-  out the matching tag and replay against the methodology *as it was at the
-  time*, not as it is today. The `/audit/<id>` page on the production site
-  links back here at the matching tag. (The CLI enforces this: a receipt whose
-  `methodology_version` differs from the running binary's exits `3`
-  VERSION_MISMATCH with an install hint for the right version.)
+- The CLI **embeds exactly one methodology version**, and its release tag is
+  **decoupled** from it: e.g. CLI `v0.4.1` embeds methodology `0.4.0` (the CLI
+  can ship fixes without a methodology bump). What matters for replay is the
+  **embedded methodology version**, not the CLI tag. A receipt carries the
+  `methodology_version` it was produced under, so anyone reading an old receipt
+  installs the CLI build that embeds *that* methodology and replays against it
+  *as it was at the time*, not as it is today. (The CLI enforces this: a receipt
+  whose `methodology_version` differs from the binary's **embedded** methodology
+  version exits `3` VERSION_MISMATCH with a hint to install the matching build.)
 - Each `v*` tag builds two Sigstore-attested targets — `x86_64-unknown-linux-gnu`
   and `aarch64-apple-darwin`. Intel Mac and Windows build from source.
 
