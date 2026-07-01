@@ -7,7 +7,8 @@ license     = "MIT"
 repository  = "https://github.com/lrafasouza/pegana-replay"
 
 [features]
-# Enables tests that read files from the workspace root. Off by default.
+# Enables tests that read files from the workspace root (e.g. ../../../assets.toml).
+# Off by default so the published crate on crates.io is self-contained.
 workspace-tests = []
 
 [dependencies]

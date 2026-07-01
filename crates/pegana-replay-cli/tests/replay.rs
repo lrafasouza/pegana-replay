@@ -63,6 +63,7 @@ fn synth_receipt() -> Receipt {
         inputs_frozen: inputs,
         expected_computed: computed,
         expected_receipt_sha256: hex_sha256(hash),
+        state_reason: None,
     }
 }
 
@@ -106,6 +107,64 @@ fn fail_when_input_tampered() {
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("FAIL"), "stderr: {stderr}");
+}
+
+// ── PASS output wording: v1 vs v2 ───────────────────────────────────────────
+
+/// v1 PASS line must advertise that it is tamper-evident only (no re-derivation).
+#[test]
+fn v1_pass_line_says_tamper_evident_only() {
+    // synth_receipt() produces a v1 receipt.
+    let receipt = synth_receipt();
+    assert_eq!(receipt.schema_version, "v1");
+    let file = write_bundle(&receipt);
+    let output = Command::new(env!("CARGO_BIN_EXE_pegana-replay"))
+        .arg("--bundle")
+        .arg(file.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("tamper-evident only"),
+        "v1 PASS line must contain 'tamper-evident only'; stdout: {stdout}"
+    );
+    assert!(
+        !stdout.contains("(re-derived)"),
+        "v1 PASS line must NOT contain '(re-derived)'; stdout: {stdout}"
+    );
+}
+
+/// v2 PASS line must still say "(re-derived)".
+#[test]
+#[cfg(feature = "workspace-tests")]
+fn v2_pass_line_says_re_derived() {
+    // Use the committed USDe-004 v2 bundle (the hash-gate bundle from the spec).
+    let bundle = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/backtests/2025-10-10-usde-depeg/receipts/USDe-004.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_pegana-replay"))
+        .arg("--bundle")
+        .arg(&bundle)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("(re-derived)"),
+        "v2 PASS line must contain '(re-derived)'; stdout: {stdout}"
+    );
+    assert!(
+        !stdout.contains("tamper-evident only"),
+        "v2 PASS line must NOT contain 'tamper-evident only'; stdout: {stdout}"
+    );
 }
 
 // ── Fix 2: ERROR paths must exit 2, not 1 ───────────────────────────────────

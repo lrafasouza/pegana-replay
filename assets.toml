@@ -1,4 +1,8 @@
-# Pegana — Asset universe v1.5 (26 assets active on mainnet, 28 total entries; 2 inactive via `active = false`: BRZ, pbUSDC — both deactivated 2026-06-01, only thin/dust DEX pairs left. 13 of the 26 active are beta (`monitoring_only` — set by DB migration mig 0048+, NOT a field here): their alerts are live but the calibration is provisional (released as beta 2026-06-16; the read-time egress gate was removed). The 2026-06-11 launch activated JupUSD, EURC, dzSOL, vSOL, JLP as monitoring-grade Phase-0 assets (this header previously listed them as inactive — stale). Historical context: 6 yield-bearing stables added in Phase A; 5 Sanctum LSTs + USD* removed 2026-05-22 due to no usable market source; USD+ deferred until Streamflow mainnet launch; JLP added 2026-05-29 to close Phase 0 gap; dSOL removed after the Drift exploit 2026-04-01.)
+# Pegana — Asset universe. 65 entries; ~64 active on mainnet (1 inactive via
+# `active = false`). NOTE: calibration status (calibrated vs monitoring_only / beta)
+# is NOT declared in this file — it is set by DB migrations (0048+); do not infer
+# the beta split from here. Keep these counts in sync when adding entries or
+# flipping `active`. Last updated 2026-06-30.
 #
 # Each asset declares:
 #   - identity:        symbol, mint, name, decimals, token_program
@@ -640,6 +644,524 @@ pyth_feed_id   = ""
 thresholds_bps = { drift = 55, depeg = 140, critical = 300 }
 active         = true                 # activated 2026-06-11 by owner override; monitoring-grade until tuned
 
+[[assets]]
+symbol = "USX"
+name = "Solstice USX"
+mint = "6FrrzDk5mQARGc1TDYoyVnSyRdds1t4PbtohCD6p3tgG"
+verified = true
+decimals = 6
+token_program = "spl"
+class = "stable_dn"
+peg_target = "USD"
+intrinsic = { kind = "fixed_1_usd" }
+market = { kind = "pyth_spot", feed = "USX/USD" }
+pyth_feed_id = "0x80950327494d0e7f29bdddb061ed7d1def1d712cec73bc167af02f0664137a16"
+thresholds_bps = { drift = 25, depeg = 100, critical = 300 }
+
+[[assets]]
+symbol = "USDG"
+name = "Global Dollar"
+mint = "2u1tszSeqZ3qBWF3uNGPFc8TzMk2tdiwknnRMWGWjGWH"
+verified = true
+decimals = 6
+token_program = "token_2022"
+class = "stable_fiat"
+peg_target = "USD"
+intrinsic = { kind = "fixed_1_usd" }
+market = { kind = "pyth_spot", feed = "USDG/USD" }
+pyth_feed_id = "0xdaa58c6a3ce7d4b9c46c32a6e646012c17c4a2b24c08dd8c5e476118b855a7da"
+thresholds_bps = { drift = 15, depeg = 50, critical = 200 }
+
+[[assets]]
+symbol = "USD1"
+name = "World Liberty Financial USD"
+mint = "USD1ttGY1N17NEEHLmELoaybftRBUSErhqYiQzvEmuB"
+verified = true
+decimals = 6
+token_program = "spl"
+class = "stable_fiat"
+peg_target = "USD"
+intrinsic = { kind = "fixed_1_usd" }
+market = { kind = "pyth_spot", feed = "USD1/USD" }
+pyth_feed_id = "0x0a2425d43486780990d8b63543029e20556be51fd756cca584212f4d539611d4"
+thresholds_bps = { drift = 20, depeg = 75, critical = 250 }
+
+[[assets]]
+symbol = "USDu"
+name = "USDu"
+mint = "9ckR7pPPvyPadACDTzLwK2ZAEeUJ3qGSnzPs8bVaHrSy"
+verified = true
+decimals = 6
+token_program = "token_2022"
+class = "stable_fiat"
+peg_target = "USD"
+intrinsic = { kind = "fixed_1_usd" }
+market = { kind = "pyth_spot", feed = "USDu/USD" }
+pyth_feed_id = "0x9c26b01925ed603f7c90deb29cd88751c580436333a7dca20a64a2c63785f502"
+thresholds_bps = { drift = 25, depeg = 100, critical = 300 }
+
+[[assets]]
+symbol = "CASH"
+name = "CASH (Bridge)"
+mint = "CASHx9KJUStyftLFWGvEVf59SGeG9sh5FfcnZMVPCASH"
+verified = true
+decimals = 6
+token_program = "token_2022"
+class = "stable_fiat"
+peg_target = "USD"
+intrinsic = { kind = "fixed_1_usd" }
+market = { kind = "jupiter_usd", numeraire = "USDC", numeraire_feed = "USDC/USD" }
+pyth_feed_id = ""
+thresholds_bps = { drift = 25, depeg = 100, critical = 300 }
+
+[[assets]]
+symbol = "AUSD"
+name = "Agora Dollar"
+mint = "AUSD1jCcCyPLybk1YnvPWsHQSrZ46dxwoMniN4N2UEB9"
+verified = true
+decimals = 6
+token_program = "token_2022"
+class = "stable_fiat"
+peg_target = "USD"
+intrinsic = { kind = "fixed_1_usd" }
+market = { kind = "pyth_spot", feed = "AUSD/USD" }
+pyth_feed_id = "0xd9912df360b5b7f21a122f15bdd5e27f62ce5e72bd316c291f7c86620e07fb2a"
+thresholds_bps = { drift = 20, depeg = 75, critical = 250 }
+
+[[assets]]
+symbol = "eUSX"
+name = "Solstice Earn USX"
+mint = "3ThdFZQKM6kRyVGLG48kaPg5TRMhYMKY1iCRa9xop1WC"
+verified = true
+decimals = 6
+token_program = "spl"
+class = "stable_yield"
+peg_target = "USD"
+intrinsic = { kind = "pyth_redemption_rate", feed = "EUSX/USX.RR" }
+market = { kind = "jupiter_usd", numeraire = "USDC", numeraire_feed = "USDC/USD" }
+pyth_feed_id = ""
+thresholds_bps = { drift = 50, depeg = 200, critical = 500 }
+
+[[assets]]
+symbol = "PST"
+name = "Huma PayFi Strategy Token"
+mint = "59obFNBzyTBGowrkif5uK7ojS58vsuWz3ZCvg6tfZAGw"
+verified = true
+decimals = 6
+token_program = "spl"
+class = "stable_yield"
+peg_target = "USD"
+intrinsic = { kind = "pyth_redemption_rate", feed = "PST/USDC.RR" }
+market = { kind = "dex_screener_usd" }
+pyth_feed_id = ""
+thresholds_bps = { drift = 30, depeg = 100, critical = 250 }
+
+[[assets]]
+symbol = "BNSOL"
+name = "Binance Staked SOL"
+mint = "BNso1VUJnh4zcfpZa6986Ea66P6TCp59hvtNJ8b1X85"
+verified = true
+decimals = 9
+token_program = "spl"
+class = "lst"
+peg_target = "SOL"
+intrinsic = { kind = "sanctum_lst", symbol = "BNSOL" }
+market = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id = ""
+thresholds_bps = { drift = 55, depeg = 140, critical = 300 }
+
+[[assets]]
+symbol = "dynoSOL"
+name = "dynoSOL"
+mint = "DYNoyS3x5qgbccZg7RPXagm4xQzfnm5iwd9o8pMyJtdE"
+verified = true
+decimals = 9
+token_program = "spl"
+class = "lst"
+peg_target = "SOL"
+intrinsic = { kind = "sanctum_lst", symbol = "dynoSOL" }
+market = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id = ""
+thresholds_bps = { drift = 55, depeg = 140, critical = 300 }
+
+[[assets]]
+symbol = "PSOL"
+name = "Phantom Staked SOL"
+mint = "pSo1f9nQXWgXibFtKf7NWYxb5enAM4qfP6UJSiXRQfL"
+verified = true
+decimals = 9
+token_program = "spl"
+class = "lst"
+peg_target = "SOL"
+intrinsic = { kind = "sanctum_lst", symbol = "PSOL" }
+market = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id = ""
+thresholds_bps = { drift = 55, depeg = 140, critical = 300 }
+
+[[assets]]
+symbol = "JSOL"
+name = "JPOOL Solana Token"
+mint = "7Q2afV64in6N6SeZsAAB81TJzwDoD6zpqmHkzi9Dcavn"
+verified = true
+decimals = 9
+token_program = "spl"
+class = "lst"
+peg_target = "SOL"
+intrinsic = { kind = "sanctum_lst", symbol = "JSOL" }
+market = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id = ""
+thresholds_bps = { drift = 55, depeg = 140, critical = 300 }
+
+[[assets]]
+symbol = "hSOL"
+name = "Helius Staked SOL"
+mint = "he1iusmfkpAdwvxLNGV8Y1iSbj4rUy6yMhEA3fotn9A"
+verified = true
+decimals = 9
+token_program = "spl"
+class = "lst"
+peg_target = "SOL"
+intrinsic = { kind = "sanctum_lst", symbol = "hSOL" }
+market = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id = ""
+thresholds_bps = { drift = 55, depeg = 140, critical = 300 }
+
+[[assets]]
+symbol = "edgeSOL"
+name = "Edgevana Staked SOL"
+mint = "edge86g9cVz87xcpKpy3J77vbp4wYd9idEV562CCntt"
+verified = true
+decimals = 9
+token_program = "spl"
+class = "lst"
+peg_target = "SOL"
+intrinsic = { kind = "sanctum_lst", symbol = "edgeSOL" }
+market = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id = ""
+thresholds_bps = { drift = 55, depeg = 140, critical = 300 }
+
+[[assets]]
+symbol = "jagSOL"
+name = "JagPool Staked SOL"
+mint = "jag58eRBC1c88LaAsRPspTMvoKJPbnzw9p9fREzHqyV"
+verified = true
+decimals = 9
+token_program = "spl"
+class = "lst"
+peg_target = "SOL"
+intrinsic = { kind = "sanctum_lst", symbol = "jagSOL" }
+market = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id = ""
+thresholds_bps = { drift = 55, depeg = 140, critical = 300 }
+
+[[assets]]
+symbol = "definSOL"
+name = "Definity Staked SOL"
+mint = "DEF1NXSZ8Th9n28hYBayrFtx9bj1EwwTiy3mhHEB9oyA"
+verified = true
+decimals = 9
+token_program = "spl"
+class = "lst"
+peg_target = "SOL"
+intrinsic = { kind = "sanctum_lst", symbol = "definSOL" }
+market = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id = ""
+thresholds_bps = { drift = 55, depeg = 140, critical = 300 }
+
+[[assets]]
+symbol = "sharkSOL"
+name = "SharkPool Staked SOL"
+mint = "BdMLRC2gKyFu8FRBErazzpEaKmB1jcVB9Eq1rXXFm4EV"
+verified = true
+decimals = 9
+token_program = "spl"
+class = "lst"
+peg_target = "SOL"
+intrinsic = { kind = "sanctum_lst", symbol = "sharkSOL" }
+market = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id = ""
+thresholds_bps = { drift = 55, depeg = 140, critical = 300 }
+
+[[assets]]
+symbol = "BulkSOL"
+name = "BULK Staked SOL"
+mint = "BULKoNSGzxtCqzwTvg5hFJg8fx6dqZRScyXe5LYMfxrn"
+verified = true
+decimals = 9
+token_program = "spl"
+class = "lst"
+peg_target = "SOL"
+intrinsic = { kind = "sanctum_lst", symbol = "BulkSOL" }
+market = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id = ""
+thresholds_bps = { drift = 55, depeg = 140, critical = 300 }
+
+[[assets]]
+symbol = "bonkSOL"
+name = "bonkSOL"
+mint = "BonK1YhkXEGLZzwtcvRTip3gAL9nCeQD7ppZBLXhtTs"
+verified = true
+decimals = 9
+token_program = "spl"
+class = "lst"
+peg_target = "SOL"
+intrinsic = { kind = "sanctum_lst", symbol = "bonkSOL" }
+market = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id = ""
+thresholds_bps = { drift = 55, depeg = 140, critical = 300 }
+
+[[assets]]
+symbol = "cgntSOL"
+name = "Cogent SOL"
+mint = "CgnTSoL3DgY9SFHxcLj6CgCgKKoTBr6tp4CPAEWy25DE"
+verified = true
+decimals = 9
+token_program = "spl"
+class = "lst"
+peg_target = "SOL"
+intrinsic = { kind = "sanctum_lst", symbol = "cgntSOL" }
+market = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id = ""
+thresholds_bps = { drift = 55, depeg = 140, critical = 300 }
+
+[[assets]]
+symbol = "LST"
+name = "Liquid Staking Token (Marginfi)"
+mint = "LSTxxxnJzKDFSLr4dUkPcmCf5VyryEqzPLz5j4bpxFp"
+verified = true
+decimals = 9
+token_program = "spl"
+class = "lst"
+peg_target = "SOL"
+intrinsic = { kind = "sanctum_lst", symbol = "LST" }
+market = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id = ""
+thresholds_bps = { drift = 55, depeg = 140, critical = 300 }
+
+[[assets]]
+symbol = "CDCSOL"
+name = "Crypto.com Staked SOL"
+mint = "CDCSoLckzozyktpAp9FWT3w92KFJVEUxAU7cNu2Jn3aX"
+verified = true
+decimals = 9
+token_program = "spl"
+class = "lst"
+peg_target = "SOL"
+intrinsic = { kind = "sanctum_lst", symbol = "CDCSOL" }
+market = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id = ""
+thresholds_bps = { drift = 55, depeg = 140, critical = 300 }
+
+[[assets]]
+symbol = "bpSOL"
+name = "bpSOL"
+mint = "BPSoLzmLQn47EP5aa7jmFngRL8KC3TWAeAwXwZD8ip3P"
+verified = true
+decimals = 9
+token_program = "spl"
+class = "lst"
+peg_target = "SOL"
+intrinsic = { kind = "sanctum_lst", symbol = "bpSOL" }
+market = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id = ""
+thresholds_bps = { drift = 55, depeg = 140, critical = 300 }
+
+[[assets]]
+symbol = "haSOL"
+name = "Hanabi Staked SOL"
+mint = "haSo1Vz5aTsqEnz8nisfnEsipvbAAWpgzRDh2WhhMEh"
+verified = true
+decimals = 9
+token_program = "spl"
+class = "lst"
+peg_target = "SOL"
+intrinsic = { kind = "sanctum_lst", symbol = "haSOL" }
+market = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id = ""
+thresholds_bps = { drift = 55, depeg = 140, critical = 300 }
+
+[[assets]]
+symbol = "laineSOL"
+name = "Laine Stake Token"
+mint = "LAinEtNLgpmCP9Rvsf5Hn8W6EhNiKLZQti1xfWMLy6X"
+verified = true
+decimals = 9
+token_program = "spl"
+class = "lst"
+peg_target = "SOL"
+intrinsic = { kind = "sanctum_lst", symbol = "laineSOL" }
+market = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id = ""
+thresholds_bps = { drift = 55, depeg = 140, critical = 300 }
+
+[[assets]]
+symbol = "xandSOL"
+name = "Xandeum Staked SOL"
+mint = "XAnDeUmMcqFyCdef9jzpNgtZPjTj3xUMj9eXKn2reFN"
+verified = true
+decimals = 9
+token_program = "spl"
+class = "lst"
+peg_target = "SOL"
+intrinsic = { kind = "sanctum_lst", symbol = "xandSOL" }
+market = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id = ""
+thresholds_bps = { drift = 55, depeg = 140, critical = 300 }
+
+[[assets]]
+symbol = "raiSOL"
+name = "Rakurai Staked SOL"
+mint = "Ra1so1sTkvX3PorAM9ewqrsUMz9sPSbfFZ5oZUjN4oc"
+verified = true
+decimals = 9
+token_program = "spl"
+class = "lst"
+peg_target = "SOL"
+intrinsic = { kind = "sanctum_lst", symbol = "raiSOL" }
+market = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id = ""
+thresholds_bps = { drift = 55, depeg = 140, critical = 300 }
+
+[[assets]]
+symbol = "picoSOL"
+name = "picoSOL"
+mint = "picobAEvs6w7QEknPce34wAE4gknZA9v5tTonnmHYdX"
+verified = true
+decimals = 9
+token_program = "spl"
+class = "lst"
+peg_target = "SOL"
+intrinsic = { kind = "sanctum_lst", symbol = "picoSOL" }
+market = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id = ""
+thresholds_bps = { drift = 55, depeg = 140, critical = 300 }
+
+[[assets]]
+symbol = "mangoSOL"
+name = "Mango Staked SOL"
+mint = "MangmsBgFqJhW4cLUR9LxfVgMboY1xAoP8UUBiWwwuY"
+verified = true
+decimals = 9
+token_program = "spl"
+class = "lst"
+peg_target = "SOL"
+intrinsic = { kind = "sanctum_lst", symbol = "mangoSOL" }
+market = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id = ""
+thresholds_bps = { drift = 55, depeg = 140, critical = 300 }
+
+[[assets]]
+symbol = "iASOL"
+name = "inshAllah SOL"
+mint = "HALALGvdNJ8u1J3uFFSsba1tyYPRF3vnYfCQ3CpJasfD"
+verified = true
+decimals = 9
+token_program = "spl"
+class = "lst"
+peg_target = "SOL"
+intrinsic = { kind = "sanctum_lst", symbol = "iASOL" }
+market = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id = ""
+thresholds_bps = { drift = 55, depeg = 140, critical = 300 }
+
+[[assets]]
+symbol = "lanternSOL"
+name = "Lantern Staked SOL"
+mint = "LnTRntk2kTfWEY6cVB8K9649pgJbt6dJLS1Ns1GZCWg"
+verified = true
+decimals = 9
+token_program = "spl"
+class = "lst"
+peg_target = "SOL"
+intrinsic = { kind = "sanctum_lst", symbol = "lanternSOL" }
+market = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id = ""
+thresholds_bps = { drift = 55, depeg = 140, critical = 300 }
+
+[[assets]]
+symbol = "RoXSOL"
+name = "RockawayX Staked SOL"
+mint = "roxDFxTFHufJBFy3PgzZcgz6kwkQNPZpi9RfpcAv4bu"
+verified = true
+decimals = 9
+token_program = "spl"
+class = "lst"
+peg_target = "SOL"
+intrinsic = { kind = "sanctum_lst", symbol = "RoXSOL" }
+market = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id = ""
+thresholds_bps = { drift = 55, depeg = 140, critical = 300 }
+
+[[assets]]
+symbol = "proSOL"
+name = "ProStaking SOL"
+mint = "jucy5XJ76pHVvtPZb5TKRcGQExkwit2P5s4vY8UzmpC"
+verified = true
+decimals = 9
+token_program = "spl"
+class = "lst"
+peg_target = "SOL"
+intrinsic = { kind = "sanctum_lst", symbol = "proSOL" }
+market = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id = ""
+thresholds_bps = { drift = 55, depeg = 140, critical = 300 }
+
+[[assets]]
+symbol = "STKESOL"
+name = "SOL Strategies Staked SOL"
+mint = "stke7uu3fXHsGqKVVjKnkmj65LRPVrqr4bLG2SJg7rh"
+verified = true
+decimals = 9
+token_program = "spl"
+class = "lst"
+peg_target = "SOL"
+intrinsic = { kind = "spl_stake_pool", pool = "StKeDUdSu7jMSnPJ1MPqDnk3RdEwD2QbJaisHMebGhw", program = "SPoo1Ku8WFXoNDMHPsrGSTSG1Y47rzgn41SLUNakuHy" }
+market = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id = ""
+thresholds_bps = { drift = 55, depeg = 140, critical = 300 }
+
+[[assets]]
+symbol = "rkuSOL"
+name = "Raiku Staked SOL"
+mint = "rkubjTrZYioRSeXwDnhwGQzvW3qkcin72JSxUt3WMVp"
+verified = true
+decimals = 9
+token_program = "spl"
+class = "lst"
+peg_target = "SOL"
+intrinsic = { kind = "spl_stake_pool", pool = "ERhozr6u9drmAANXGRNP1oh3quSqPKEwioKH5b8v9Kkt", program = "SP12tWFxD9oJsVWNavTTBZvMbA6gkAmxtVgxdqvyvhY" }
+market = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id = ""
+thresholds_bps = { drift = 55, depeg = 140, critical = 300 }
+
+[[assets]]
+symbol = "corvusSOL"
+name = "Corvus Staked SOL"
+mint = "CorvuSSoLxPKLoXWXSfn8pFSMhCRHhe7Uwqe874cmwvg"
+verified = true
+decimals = 9
+token_program = "spl"
+class = "lst"
+peg_target = "SOL"
+intrinsic = { kind = "spl_stake_pool", pool = "E5NXU96SgMEm49RBW8ZoAzs9MBr8fgxzLtypBNGKUS66", program = "SP12tWFxD9oJsVWNavTTBZvMbA6gkAmxtVgxdqvyvhY" }
+market = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id = ""
+thresholds_bps = { drift = 55, depeg = 140, critical = 300 }
+
+[[assets]]
+symbol = "USD*"
+name = "Perena USD Star"
+mint = "star9agSpjiFe3M49B3RniVU4CMBBEK3Qnaqn3RGiFM"
+verified = true
+decimals = 6
+token_program = "spl"
+class = "stable_yield"
+peg_target = "USD"
+intrinsic = { kind = "perena_usd_star_nav", reserve = "sM6P4mh53CnG4faN4Fo3seY7wMSAiHdy8o6gKjwQF7A", program = "save8RQVPMWNTzU18t3GBvBkN9hT7jsGjiCQ28FpD9H" }
+market = { kind = "jupiter_usd", numeraire = "USDC", numeraire_feed = "USDC/USD" }
+pyth_feed_id = ""
+thresholds_bps = { drift = 50, depeg = 200, critical = 500 }
+
 # ============================================================
 # Pyth feeds (used by multiple assets, cached centrally)
 # ============================================================
@@ -674,6 +1196,13 @@ active         = true                 # activated 2026-06-11 by owner override; 
 # Same code-path as USDY/syrupUSDC/sUSDe/ONyc — pyth.rs handles RR + spot.
 "JLP/USD.RR"     = "0x6704952e00b6a088b6dcdb8170dcd591eaf64cff9e996ca75ae0ca55bfb96687"
 "JLP/USD"        = "0xc811abc82b4bad1f9bd711a2773ccaa935b03ecef974236942cec5e0eb845a3a"
+"USX/USD"     = "0x80950327494d0e7f29bdddb061ed7d1def1d712cec73bc167af02f0664137a16"
+"USDG/USD"    = "0xdaa58c6a3ce7d4b9c46c32a6e646012c17c4a2b24c08dd8c5e476118b855a7da"
+"USD1/USD"    = "0x0a2425d43486780990d8b63543029e20556be51fd756cca584212f4d539611d4"
+"USDu/USD"    = "0x9c26b01925ed603f7c90deb29cd88751c580436333a7dca20a64a2c63785f502"
+"AUSD/USD"    = "0xd9912df360b5b7f21a122f15bdd5e27f62ce5e72bd316c291f7c86620e07fb2a"
+"EUSX/USX.RR" = "0xf36e12e65d2969b242fb97d3ebaa32ec55d5794189b64d1a07dc4f41425c9378"
+"PST/USDC.RR" = "0x675e36f84a6be779ed793c71eb5c03151e1866c125767f46933626e0610af84d"
 
 # ============================================================
 # Polling cadences (env vars override these)
@@ -704,3 +1233,5 @@ default_secs = 30
 "SUSDE/USDE.RR"       = 129600   # 36h — daily Ethena redemption rate
 "SYRUPUSDC/USDC.RR"   = 129600   # 36h — daily Maple redemption rate
 "ONYC/USD.NAV"        = 604800   # 7d  — weekly Ondo NAV step
+"EUSX/USX.RR" = 129600
+"PST/USDC.RR" = 129600

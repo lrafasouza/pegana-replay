@@ -1,4 +1,4 @@
-# Pegana methodology — v0.2.0
+# Pegana methodology — v0.4.0
 
 How peg-risk signals are produced, why this design over the obvious
 alternatives, and what every load-bearing piece of the math is doing.
@@ -108,37 +108,80 @@ Five states, transitions driven by `(discount_bps, current_state)`:
                        (hysteresis-gated downgrades)
 ```
 
-Thresholds are per-asset-class because a 50bps move is normal for
-`stable_fiat` but a screaming emergency for `stable_cdp`:
+Thresholds are per-asset (calibrated in `assets.toml`) because a 50bps
+move is normal for `stable_fiat` but a screaming emergency for
+`stable_cdp`. The table shows representative values; per-asset entries in
+`assets.toml` are the authoritative source:
 
-| Class | DRIFT | DEPEG | CRITICAL | Source |
-|---|---|---|---|---|
-| stable_fiat (USDC, USDT, PYUSD…) | 15bps | 50bps | 200bps | `crates/methodology/src/thresholds.rs` |
-| stable_cdp (hyUSD) | 10bps | 30bps | 100bps | same |
-| lst (jitoSOL, dzSOL…)* | 20bps | 80bps | 250bps | same |
-| stable_yield (USDY, sUSD, syrupUSDC, sUSDe…) | discount-only* | 30bps | 100bps | same |
-| synth_lev (xSOL) | 100bps | 300bps | 1000bps | same |
+| Class | DRIFT | DEPEG | CRITICAL | BLACK_SWAN | Source |
+|---|---|---|---|---|---|
+| stable_fiat (USDC, USDT, PYUSD…) | ~15–20bps | ~50bps | ~200bps | ~400bps† | `assets.toml` per asset |
+| stable_cdp (hyUSD) | CR<130% | CR<115% | CR<105% | CR<100% | `assets.toml` `thresholds_cr` |
+| lst (jitoSOL, dzSOL…)* | ~40–140bps | ~100–280bps | ~250–560bps | ~500bps+† | same |
+| stable_yield (USDY, sUSD, syrupUSDC, sUSDe…) | discount-only* | ~30bps | ~100bps | ~200bps† | same |
+| synth_lev (xSOL) | ~100bps | ~300bps | ~1000bps | ~2000bps† | same |
 
-Wider per-asset overrides live in `assets.toml` under each asset's
-`[assets.thresholds_bps]` or `[assets.thresholds_cr]` block. The
-methodology crate reads them; the engine doesn't.
+† `black_swan` defaults to `2 × critical` when not overridden in `assets.toml`
+(v0.4.0, ADR-0025). Per-asset overrides via `black_swan` / `black_swan_bps` /
+`cr_black_swan` keys.
 
 \* For yield-bearing stables **and LSTs** only the *discount* side
 triggers — i.e., `market < intrinsic`. A premium (`market > intrinsic`)
 normalizes to `PEGGED`. For a yield-bearing stable a premium is thin
 secondary liquidity; for an LST it's demand pressure, not stress — the
 risk signal is the *discount* (redemption stress, cf. stETH −7% in 2022,
-ezETH's depeg). `is_direction_sensitive` covers both classes as of
-v0.2.0 (ADR-0021). Discount-side classification is unchanged.
+ezETH's depeg). `is_direction_sensitive` covers both classes (ADR-0021).
+Discount-side classification is unchanged.
+
+**NAV-premium sanity gate (v0.4.0, ADR-0025).** The premium→PEGGED
+carve-out is correct for real demand pressure but can silently mask a
+*broken intrinsic anchor* — e.g. sHYUSD: market ≈ +30% above a
+thin-Jupiter NAV print, yet PEGGED. If the premium exceeds
+`NAV_PREMIUM_SANITY_BPS = 1000` (10%) on a direction-sensitive class the
+engine concludes the NAV anchor is broken and forces the state to
+**UNKNOWN** instead. Legitimate premiums never approach this bound (the
+widest observed across all assets is INF ≈ 160 bps); the discount side
+and symmetric classes are untouched. Code:
+`crates/methodology/src/thresholds.rs` — `premium_sanity_violated` /
+`NAV_PREMIUM_SANITY_BPS`.
+
+### BLACK_SWAN
+
+The fifth state, `BLACK_SWAN`, is reached when the spread exceeds a
+threshold beyond every normal operating band. As of v0.4.0 (ADR-0025) it
+is reachable via **both** classification paths:
+
+- **Spread path (bps).** `state_for_bps_discount` has a `black_swan` band
+  that defaults to `2 × critical` when not specified in `assets.toml`. A
+  stable_fiat asset at ≥ 400 bps discount (e.g. USDC trading at $0.96),
+  or a UST-style cascade already in CRITICAL, enters BLACK_SWAN. Before
+  v0.4.0 the bps path topped at CRITICAL; only the CR path could reach
+  BLACK_SWAN, leaving the advertised five-state machine unreachable for
+  25/26 assets.
+- **CR path (CDP stables).** `state_for_cr` enters BLACK_SWAN when CR
+  drops below `cr_black_swan` (default 100%).
+
+**BLACK_SWAN is not a terminal state.** It auto-exits via normal
+hysteresis like every other band — the engine does NOT enforce an
+operator-reset or "never-auto-exits" behavior. No such reset path exists
+to make a permanent terminal state safe (a false or recovered black_swan
+would otherwise be stuck forever). The CR-path BLACK_SWAN (hyUSD) already
+behaved this way before v0.4.0; the spread-path BLACK_SWAN follows the
+same rule. Any prior marketing copy implying terminal behavior was
+incorrect and has been corrected per ADR-0025. Code:
+`crates/methodology/src/thresholds.rs` — `state_for_bps_discount` (spread
+path) and `state_for_cr` (CR path).
 
 ### EWMA smoothing
 
 Raw spread ticks are noisy — a single 100ms Jupiter quote can spike
 because of a thin route or a stale fill. The methodology runs an
-**exponentially-weighted moving average** with `α = 0.4` over the
+**exponentially-weighted moving average** with `α = 0.3` over the
 last several recompute cycles before applying thresholds. That cuts
 ~80% of single-tick spikes without measurably delaying real
-transitions. Code: `crates/methodology/src/ewma.rs`.
+transitions. Code: `crates/methodology/src/ewma.rs` — `apply_ewma_pure`
+(formula: `α × raw + (1 − α) × prev`; seeds at `raw` on cold-start when
+no prior EWMA exists).
 
 ### Hysteresis
 
@@ -150,17 +193,30 @@ near a threshold.
 crosses the threshold; *demoting* requires the EWMA to fall ≥30% below
 the threshold for ≥3 consecutive ticks.
 
-**Magnitude-hysteresis (Schmitt-trigger deadband, v0.2.0).** Time-
-hysteresis alone could not stop oscillation *at* the boundary, so
-v0.2.0 added `classify_with_hysteresis`: escalation still uses the
-normal threshold, but a relaxation toward a looser state only commits
-once the smoothed discount falls below `threshold × (1 − deadband_pct)`
-(engine default `deadband_pct = 25%`). Example: JupSOL flapped
-`DRIFT`↔`PEGGED` around 60 bps (84.7 → 48.8 bps); the deadband (exit at
-45 bps) holds the state through the dead zone. See ADR-0021.
+**Magnitude-hysteresis — spread path (Schmitt-trigger deadband, ADR-0021).**
+Time-hysteresis alone could not stop oscillation *at* the boundary, so
+`classify_with_hysteresis` was added: escalation still uses the normal
+threshold, but a relaxation toward a looser state only commits once the
+smoothed discount falls below `threshold × (1 − deadband_pct)` (engine
+default `DEADBAND_PCT = 25`). Example: JupSOL flapped `DRIFT`↔`PEGGED`
+around 60 bps (84.7 → 48.8 bps); the deadband (exit at 45 bps) holds
+the state through the dead zone. Code:
+`crates/methodology/src/thresholds.rs` — `classify_with_hysteresis`.
 
-Code: `crates/methodology/src/transition.rs`. The constants (0.30 retreat
-margin, 3-tick floor, 25% deadband) are checked by proptest in the
+**Magnitude-hysteresis — CR path (Schmitt-trigger deadband, ADR-0023).**
+CDP assets (hyUSD) are classified via the collateral-ratio path, not bps.
+For CR, *lower* is worse, so the exit band is inverted: relaxation toward
+a looser state only commits once CR rises above
+`threshold × (1 + CR_DEADBAND_PCT)` (engine default `CR_DEADBAND_PCT = 2`,
+i.e. a 2% band). The DRIFT threshold for hyUSD is **130%** (CR < 130% →
+DRIFT); this is intentional — hyUSD rests at ≈ 133% (σ ≈ 2.5 pp) and
+`DRIFT at CR < 130` is a deliberate risk-level choice, not a bug. The
+deadband reduced calibration-window flapping from 52 transitions to ~10
+without changing the threshold. Code:
+`crates/methodology/src/thresholds.rs` — `classify_cr_with_hysteresis`.
+
+The time-hysteresis constants (0.30 retreat margin, 3-tick floor) and the
+deadband constants (25% spread, 2% CR) are checked by proptest in the
 crate's test suite.
 
 ---
@@ -205,7 +261,7 @@ The CLI:
 2. Reads `methodology_version` from the receipt.
 3. Loads the matching version of `pegana-methodology` (this repo
    pins by git tag — the release tag equals the methodology version it
-   embeds, e.g. `v0.2.0` ships methodology 0.2.0).
+   embeds, e.g. `v0.4.0` ships methodology 0.4.0).
 4. Re-hashes the receipt's frozen inputs + recorded verdict using
    `canonical_receipt_hash` and compares to the on-chain-anchored
    canonical hash; checks the anchoring transaction was signed by a
@@ -241,6 +297,13 @@ Memo commit would have a block_time later than the receipt's
 `detected_at`. Code: `crates/methodology/src/canonical.rs` (the
 hash function) + the engine's `onchain_commit.rs` in the closed
 sibling repo.
+
+Note: the anti-backdating enforcement (`block_time > detected_at` check)
+runs inside the closed sibling repo's engine and is therefore not
+verifiable from this public repo. The hash itself — which you can
+reproduce from this repo's `canonical_receipt_hash` — is what you verify;
+the block_time ordering is confirmable directly from the Solana explorer
+for any `onchain_tx_sig`.
 
 ### Retraction protocol
 
@@ -296,7 +359,7 @@ A few things this design explicitly does not do, with reasons:
 
 | Path | What it is |
 |---|---|
-| [`crates/methodology/`](crates/methodology) | Pure functions implementing this document. Versioned by semver; the CLI release tag equals the methodology version it embeds (e.g. `v0.2.0`), so a receipt's `methodology_version` maps directly to a release tag. |
+| [`crates/methodology/`](crates/methodology) | Pure functions implementing this document. Versioned by semver; the CLI release tag equals the methodology version it embeds (e.g. `v0.4.0`), so a receipt's `methodology_version` maps directly to a release tag. |
 | [`crates/pegana-replay-cli/`](crates/pegana-replay-cli) | The CLI binary that runs the methodology against a fetched receipt. |
 | [`crates/common-verify/`](crates/common-verify) | Config types + `AlertEvidence` schema returned by the API. |
 | [`assets.toml`](assets.toml) | Canonical asset list. Hashed into every receipt. |

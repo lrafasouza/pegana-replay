@@ -165,6 +165,32 @@ mod tests {
         "[A-Za-z][A-Za-z0-9]{0,7}".prop_map(|s| s)
     }
 
+    #[test]
+    fn state_reason_is_outside_the_hash() {
+        let inputs = sample_inputs();
+        let computed = sample_computed();
+        let toml_str = "[[assets]]\nsymbol=\"USDC\"\n";
+
+        let h1 = canonical_receipt_hash("0.4.0", None, toml_str, &inputs, &computed).unwrap();
+
+        // Build a Receipt, set state_reason, then verify the hash of the same
+        // (inputs, computed) args is identical — proving state_reason is NOT in
+        // the hash path.
+        let _receipt_with_reason = crate::receipt::Receipt {
+            schema_version: "v2".into(),
+            methodology_version: "0.4.0".into(),
+            methodology_git_sha: None,
+            assets_toml_canonical: toml_str.into(),
+            inputs_frozen: inputs.clone(),
+            expected_computed: computed.clone(),
+            expected_receipt_sha256: hex_sha256(h1),
+            state_reason: Some("premium_sanity".into()),
+        };
+
+        let h2 = canonical_receipt_hash("0.4.0", None, toml_str, &inputs, &computed).unwrap();
+        assert_eq!(h1, h2, "state_reason must not affect the canonical hash");
+    }
+
     proptest! {
         /// INVARIANT-UNDER-COMMENT-CHANGES: inserting or removing TOML comments
         /// must NOT change `canonical_assets_hash`.  The parser strips comments

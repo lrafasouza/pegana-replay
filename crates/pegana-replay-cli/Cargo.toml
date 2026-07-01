@@ -17,13 +17,14 @@ repository  = "https://github.com/lrafasouza/pegana-replay"
 keywords    = ["pegana", "audit", "verify", "solana"]
 categories  = ["command-line-utilities"]
 
+[features]
+# Enables tests that read files from the workspace root (e.g. ../../docs/backtests/...).
+# Off by default so the published crate on crates.io is self-contained.
+workspace-tests = []
+
 [[bin]]
 name = "pegana-replay"
 path = "src/main.rs"
-
-[features]
-# Enables tests that read files from the workspace root. Off by default.
-workspace-tests = []
 
 [dependencies]
 pegana-methodology   = { path = "../methodology", version = "0.4.0" }

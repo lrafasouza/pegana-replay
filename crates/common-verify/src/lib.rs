@@ -149,6 +149,15 @@ pub enum IntrinsicStrategy {
     SanctumLst {
         symbol: String,
     },
+    /// Generic SPL stake-pool LST not in the Sanctum registry. NAV(SOL/token) =
+    /// total_lamports / pool_token_supply, read from the StakePool state account
+    /// (owned by `program` — canonical SPL stake-pool OR a SanctumSpl fork; both
+    /// share the StakePool layout). USD = NAV × Pyth SOL/USD. The indexer source
+    /// `spl_stake_pool` publishes `{value_usd, value_sol}` on SRC_SPL_STAKE_POOL.
+    SplStakePool {
+        pool: String,
+        program: String,
+    },
     #[serde(rename = "fixed_1_usd")]
     Fixed1Usd,
     HyloCr {
@@ -198,11 +207,11 @@ pub enum IntrinsicStrategy {
         program: String,
     },
 
-    /// Perena USD* — pool LP token. NAV = Σ(underlying balance × underlying USD)
-    /// / USD* supply. Multi-account read: pool PDA + N underlying vault accounts.
-    PerenaUsdStarPool {
-        pool: String,
-        underlying: Vec<String>,
+    /// Perena USD* savings-vault share token. NAV is stored in the reserve
+    /// account at offset 352 and cross-checked against total_underlying /
+    /// share_supply at offsets 192 / 200 to detect silent layout shifts.
+    PerenaUsdStarNav {
+        reserve: String,
         program: String,
     },
 

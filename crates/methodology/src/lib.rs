@@ -4,6 +4,21 @@
 //! runtime; pegana-replay-cli calls the same functions offline to verify alerts.
 //! No tokio, no I/O, no global state.
 
+/// Emitted by the engine when the NAV-sanity check overrides the verdict
+/// (smoothed discount exceeded the premium-sanity bound; intrinsic anchor
+/// suspect; state forced to UNKNOWN). Mirrors `Receipt.state_reason` and
+/// `discount_snapshots.state_reason`. The API SQL uses the string literal
+/// `'premium_sanity'` which must stay identical to this const.
+pub const STATE_REASON_PREMIUM_SANITY: &str = "premium_sanity";
+
+/// Synthesized by the API layer (not the engine) when the most-recent
+/// discount snapshot is older than 15 minutes (stale feed). The state is
+/// collapsed from the stored value to UNKNOWN. The API SQL uses the string
+/// literal `'stale_source'` which must stay identical to this const.
+/// Not present in engine receipts — the engine stops writing when data is
+/// absent, so a stale row implies the engine saw a dead feed, not a decision.
+pub const STATE_REASON_STALE_SOURCE: &str = "stale_source";
+
 pub mod canonical;
 pub mod discount;
 pub mod ewma;

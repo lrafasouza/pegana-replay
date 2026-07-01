@@ -65,6 +65,26 @@ pub struct Receipt {
     pub inputs_frozen: InputsFrozen,
     pub expected_computed: Computed,
     pub expected_receipt_sha256: String,
+    /// Advisory, machine-readable reason for the current state — explains the
+    /// "why" behind UNKNOWN / a premium / a skip. NOT part of the canonical
+    /// hash (sibling of `schema_version`): old 0.4.0 receipts re-hash/re-derive
+    /// identically. Tamper-EVIDENT only via the surrounding transport, not via
+    /// the receipt hash.
+    ///
+    /// **Emitted today:**
+    /// - `premium_sanity` — engine NAV-sanity override: smoothed discount exceeded
+    ///   the premium-sanity bound, intrinsic anchor is suspect, state forced to
+    ///   UNKNOWN (see `pegana_methodology::STATE_REASON_PREMIUM_SANITY`).
+    /// - `stale_source` — API layer: feed is >15 min stale, state collapsed to
+    ///   UNKNOWN by the API (not in receipts; see `STATE_REASON_STALE_SOURCE`).
+    ///
+    /// **Reserved — not yet emitted (planned for depth-gate / oracle-crosscheck
+    /// work):** `no_oracle_crosscheck | intrinsic_unavailable | shallow_market |
+    /// nominal`.
+    ///
+    /// `None` on legacy receipts and rows where no reason applies (serde default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_reason: Option<String>,
 }
 
 #[cfg(test)]

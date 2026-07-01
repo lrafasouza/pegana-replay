@@ -221,7 +221,7 @@ fn verify(receipt: &Receipt, quiet: bool) -> Result<()> {
         }
         " (re-derived)"
     } else {
-        "" // v1: re-hash only
+        " (tamper-evident only; v1 not re-derived)"
     };
 
     if !quiet {
@@ -530,6 +530,7 @@ mod tests {
             inputs_frozen: inputs,
             expected_computed: computed,
             expected_receipt_sha256: receipt_hash,
+            state_reason: None,
         }
     }
 
@@ -618,6 +619,7 @@ mod tests {
             inputs_frozen: inputs.clone(),
             expected_computed: dishonest_computed.clone(),
             expected_receipt_sha256: dishonest_hash,
+            state_reason: None,
         };
 
         // Re-hash of dishonest_receipt would PASS (hash is consistent with (inputs, dishonest_computed)).
