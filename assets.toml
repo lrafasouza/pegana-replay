@@ -28,7 +28,7 @@ decimals       = 9
 token_program  = "spl"
 class          = "lst"
 peg_target     = "SOL"
-intrinsic      = { kind = "sanctum_lst", symbol = "jitoSOL" }
+intrinsic      = { kind = "spl_stake_pool", pool = "Jito4APyf642JPZPx3hGc6WWJ8zPKtRbRs4P815Awbb", program = "SPoo1Ku8WFXoNDMHPsrGSTSG1Y47rzgn41SLUNakuHy" }
 market         = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
 pyth_feed_id   = "0x67be9f519b95cf24338801051f9a808eff0a578ccb388db73b7f6fe1de019ffb"
 # Calibrated 2026-05-25 from 24h p99 ~36 bps × 1.25 buffer.
