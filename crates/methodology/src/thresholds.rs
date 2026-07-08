@@ -69,7 +69,17 @@ pub fn premium_sanity_violated(class: AssetClass, discount: Decimal) -> bool {
     if !(is_direction_sensitive(class) && discount < Decimal::ZERO) {
         return false;
     }
-    discount.abs() * Decimal::from(10_000u32) > Decimal::from(NAV_PREMIUM_SANITY_BPS)
+    // checked_mul: `discount` is `discount_smooth` (EWMA output), which
+    // apply_ewma_pure guards against overflowing but NOT against being an
+    // unbounded magnitude (e.g. an untrusted rederive() alpha/ewma_prev can
+    // produce a huge-but-not-overflowing smoothed value). A magnitude too
+    // large for this multiplication to survive is itself already far beyond
+    // any real premium — treat it as violated (matches the whole point of
+    // this check: an implausible discount forces honest-dark UNKNOWN).
+    discount
+        .abs()
+        .checked_mul(Decimal::from(10_000u32))
+        .is_none_or(|bps| bps > Decimal::from(NAV_PREMIUM_SANITY_BPS))
 }
 
 /// Maximum plausible DISCOUNT (market below NAV/intrinsic — a *positive* discount) for a
@@ -102,7 +112,12 @@ pub fn discount_sanity_violated(class: AssetClass, discount: Decimal) -> bool {
     if !(is_direction_sensitive(class) && discount > Decimal::ZERO) {
         return false;
     }
-    discount.abs() * Decimal::from(10_000u32) > Decimal::from(NAV_DISCOUNT_SANITY_BPS)
+    // checked_mul: see premium_sanity_violated — same untrusted-magnitude
+    // reasoning, overflow itself is proof the discount is implausible.
+    discount
+        .abs()
+        .checked_mul(Decimal::from(10_000u32))
+        .is_none_or(|bps| bps > Decimal::from(NAV_DISCOUNT_SANITY_BPS))
 }
 
 /// Direction-aware variant of `state_for_bps_discount`. For classes where
@@ -215,13 +230,30 @@ pub fn classify_cr_with_hysteresis(
 /// symmetric classes (LST, fiat, dn, fx, synth_lev). For yield-bearing
 /// stables, use `state_for_bps_discount_aware` instead.
 pub fn state_for_bps_discount(discount: Decimal, thresholds: &HashMap<String, u32>) -> PegState {
-    let abs_bps = (discount.abs() * Decimal::from(10_000u32)).to_string();
-    // Parse to integer.
-    let abs_bps: u32 = abs_bps
-        .split('.')
-        .next()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0);
+    // `discount` is `discount_smooth`, whose magnitude isn't bounded by
+    // apply_ewma_pure's overflow guard alone (see premium_sanity_violated).
+    // Two independent overflow sites here, both must saturate to u32::MAX
+    // (worst case — a larger discount is always worse, unlike a CR ratio
+    // where larger = healthier), never to 0/Pegged:
+    //   1. checked_mul itself can overflow Decimal (magnitude > ~7.9e24).
+    //   2. Below that Decimal ceiling but still > u32::MAX bps (~4.3e9,
+    //      i.e. a 430,000%+ discount), the string-to-u32 parse fails on its
+    //      own. Caught by re-testing with a correctly re-hashed crafted
+    //      receipt that reaches this code, not just a unit test of this
+    //      function in isolation — a bare `.unwrap_or(0)` here silently
+    //      laundered an implausible reading into a false-healthy Pegged
+    //      verdict, arguably worse than the panic this fix started from.
+    let abs_bps: u32 = discount
+        .abs()
+        .checked_mul(Decimal::from(10_000u32))
+        .and_then(|scaled| {
+            scaled
+                .to_string()
+                .split('.')
+                .next()
+                .and_then(|s| s.parse().ok())
+        })
+        .unwrap_or(u32::MAX);
 
     // Accept BOTH unsuffixed (assets.toml: `drift = 20`) and suffixed
     // (DB seed JSONB: `"drift_bps": 20`) keys. assets.toml is the canonical
@@ -730,6 +762,47 @@ mod tests {
             state_for_cr(Decimal::MAX, &cr_thresholds()),
             PegState::Pegged
         );
+    }
+
+    /// Regression: `discount_smooth` (rederive's EWMA output) has no bound on
+    /// magnitude beyond "didn't overflow the EWMA arithmetic itself" — an
+    /// untrusted rederive() alpha/ewma_prev can produce a value large enough
+    /// that `discount.abs() * 10_000` (bps scaling) overflows on its own,
+    /// even though the EWMA step that produced it succeeded cleanly. Unlike
+    /// state_for_cr (where overflow means "obviously healthy"), an
+    /// overflowing DISCOUNT is unambiguously the worst case — it must
+    /// saturate to BlackSwan, not panic.
+    #[test]
+    fn bps_discount_overflow_saturates_to_black_swan_not_panic() {
+        assert_eq!(
+            state_for_bps_discount(Decimal::MAX, &jup_thresholds()),
+            PegState::BlackSwan
+        );
+    }
+
+    /// Second, independent overflow site at a SMALLER magnitude than
+    /// `Decimal::MAX`: `checked_mul(10_000)` succeeds (no Decimal overflow),
+    /// but the scaled value is still too large to fit in `u32`, so the
+    /// string-to-u32 parse fails. Caught only by re-testing against a
+    /// correctly re-hashed crafted CLI receipt that actually reaches this
+    /// code (a `Decimal::MAX`-only unit test does not exercise this path) —
+    /// a bare `.unwrap_or(0)` here previously laundered this into a
+    /// false-healthy Pegged verdict instead of the worst-case BlackSwan.
+    #[test]
+    fn bps_discount_between_decimal_and_u32_ceiling_saturates_to_black_swan() {
+        let d = Decimal::from_str("59229100000000000000000").unwrap();
+        assert!(d.checked_mul(Decimal::from(10_000u32)).is_some());
+        assert_eq!(state_for_bps_discount(d, &jup_thresholds()), PegState::BlackSwan);
+    }
+
+    /// Same untrusted-magnitude overflow, but through the NAV-sanity guards
+    /// rather than the classification bands. An overflowing discount must
+    /// register as "sanity violated" (forces honest-dark UNKNOWN in
+    /// rederive), not panic and not silently pass as plausible.
+    #[test]
+    fn premium_and_discount_sanity_overflow_violates_not_panic() {
+        assert!(premium_sanity_violated(AssetClass::Lst, -Decimal::MAX));
+        assert!(discount_sanity_violated(AssetClass::Lst, Decimal::MAX));
     }
 
     /// H2 consequence guard. A missing hyUSD collateral ratio USED to be

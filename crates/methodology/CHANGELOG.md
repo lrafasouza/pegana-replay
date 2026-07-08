@@ -1,5 +1,29 @@
 # pegana-methodology changelog
 
+## 0.6.1 — 2026-07-08
+
+Bug fix (PATCH — no API signature change, unlike 0.6.0). Follow-up to 0.6.0:
+`apply_ewma_pure`'s overflow guard protects the EWMA arithmetic itself, but
+its output (`discount_smooth`) has no bound on magnitude beyond "didn't
+overflow that specific computation." Three downstream consumers —
+`premium_sanity_violated`, `discount_sanity_violated`, and
+`state_for_bps_discount` — all did unchecked `discount.abs() * 10_000` (bps
+scaling), so an untrusted `rederive()` input crafted to produce a
+large-but-non-overflowing `discount_smooth` (a moderately large out-of-range
+`alpha` is enough) still panicked one step later. Found via a systematic
+grep for the same `.abs() * Decimal::from(10_000...)` pattern across the
+crate after shipping 0.6.0 — same bug class, three more sites.
+
+`premium_sanity_violated`/`discount_sanity_violated` now treat an
+overflowing magnitude as violated (`true`) — consistent with their purpose:
+an implausible discount forces honest-dark UNKNOWN rather than a false
+verdict. `state_for_bps_discount` saturates to BlackSwan (not the 0/Pegged a
+naive parse-failure default would give) — unlike a CR ratio where larger is
+healthier, a larger discount is always worse, so overflow must map to the
+most alarming band. Zero verdict change on the 2025-10-10 backtest golden
+(123 receipts, re-baselined, no diff beyond version+hash) — unreachable in
+the live engine for the same reason as 0.6.0.
+
 ## 0.6.0 — 2026-07-08
 
 API change (MINOR), not a verdict change. `apply_ewma_pure` and `state_for_cr`
