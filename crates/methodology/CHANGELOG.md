@@ -1,5 +1,22 @@
 # pegana-methodology changelog
 
+## 0.6.0 — 2026-07-08
+
+API change (MINOR), not a verdict change. `apply_ewma_pure` and `state_for_cr`
+used unchecked `Decimal` arithmetic, which `rust_decimal` panics on overflow
+rather than erroring — same bug class as the 0.4.0-era `discount.rs` fix,
+never applied to these two functions. `apply_ewma_pure` now returns
+`Option<Decimal>` (breaking signature change, hence MINOR); `state_for_cr`
+saturates to the healthiest band on overflow instead of panicking (signature
+unchanged). Unreachable in the live engine by construction — `discount_raw`
+is always `|d| < 1` before reaching `apply_ewma_pure`, and by induction so is
+every prior EWMA output, so the overflow can only be triggered by out-of-range
+`alpha`/`ewma_prev`/`hyusd_cr` in an untrusted receipt fed to `rederive`
+(i.e. via `pegana-replay`'s public verify CLI, not the engine's own pipeline).
+Every legitimate, in-range input produces the exact same result as before —
+only pathological inputs that previously crashed the process now return
+`None`/saturate instead. No existing receipt's recorded verdict changes.
+
 ## 0.5.0 — 2026-07-01
 
 Behavior change (MINOR). Intrinsic-sanity guard —

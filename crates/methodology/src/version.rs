@@ -15,7 +15,7 @@ mod tests {
 
     #[test]
     fn version_matches_cargo_toml() {
-        assert_eq!(methodology_version(), "0.5.0");
+        assert_eq!(methodology_version(), "0.6.0");
     }
 
     #[test]
