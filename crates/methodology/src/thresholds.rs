@@ -294,14 +294,23 @@ pub fn state_for_cr(cr: Decimal, thresholds: &HashMap<String, u32>) -> PegState 
         .copied()
         .unwrap_or(100);
 
-    // Convert CR to integer percent.
-    let cr_pct = (cr * Decimal::from(100u32))
-        .to_string()
-        .split('.')
-        .next()
-        .and_then(|s| s.parse::<i64>().ok())
-        .unwrap_or(0)
-        .max(0) as u32;
+    // Convert CR to integer percent. `checked_mul` guards a `cr` magnitude
+    // large enough to overflow Decimal (rust_decimal's `*` PANICS on
+    // overflow) — a CR that extreme is already unambiguously deep in
+    // "way over-collateralized" territory regardless of its exact value, so
+    // saturating to u32::MAX (routed to the healthiest `_ => Pegged` arm
+    // below) is the correct classification, not a guess.
+    let cr_pct = cr
+        .checked_mul(Decimal::from(100u32))
+        .and_then(|scaled| {
+            scaled
+                .to_string()
+                .split('.')
+                .next()
+                .and_then(|s| s.parse::<i64>().ok())
+        })
+        .map(|n| n.max(0) as u32)
+        .unwrap_or(u32::MAX);
 
     match cr_pct {
         n if n < black_swan => PegState::BlackSwan,
@@ -706,6 +715,20 @@ mod tests {
         assert_eq!(
             state_for_cr(Decimal::from_str("0.95").unwrap(), &cr_thresholds()),
             PegState::BlackSwan
+        );
+    }
+
+    /// Regression: `rederive`'s `hyusd_cr` comes straight from an untrusted
+    /// receipt with no bound on magnitude. A CR of `Decimal::MAX` previously
+    /// panicked ("Multiplication overflowed") on the `cr * 100` scaling
+    /// instead of classifying — a CR this astronomically high is unambiguously
+    /// deep in over-collateralized territory, so it must classify as Pegged,
+    /// not crash the verifier.
+    #[test]
+    fn cr_overflow_saturates_to_pegged_not_panic() {
+        assert_eq!(
+            state_for_cr(Decimal::MAX, &cr_thresholds()),
+            PegState::Pegged
         );
     }
 

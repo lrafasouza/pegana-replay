@@ -55,6 +55,13 @@ pub enum MethodologyRederiveError {
     /// hyUSD CR path requires `hyusd_cr` but the field is `None`.
     #[error("hyUSD CR path selected but hyusd_cr is None in frozen inputs")]
     MissingHyusdCr,
+
+    /// `apply_ewma_pure` overflowed — `ewma_prev`/`alpha` in the frozen inputs
+    /// are untrusted and unbounded (unlike the live engine, where they're
+    /// always `|x| < 1` by construction). A receipt whose frozen inputs
+    /// overflow the EWMA step cannot be re-derived.
+    #[error("EWMA smoothing overflowed — frozen ewma_prev/alpha cannot be re-derived")]
+    EwmaOverflow,
 }
 
 /// The re-derived verdict from frozen `InputsFrozen`.
@@ -115,7 +122,8 @@ pub fn rederive(inputs: &InputsFrozen) -> Result<Rederived, MethodologyRederiveE
 
     // Step 3: EWMA smoothing. `apply_ewma_pure` seeds at `raw` when `prev` is
     // None (cold-start: no prior EWMA for this asset).
-    let discount_smooth = apply_ewma_pure(discount_raw, inputs.ewma_prev, inputs.alpha);
+    let discount_smooth = apply_ewma_pure(discount_raw, inputs.ewma_prev, inputs.alpha)
+        .ok_or(MethodologyRederiveError::EwmaOverflow)?;
 
     // Step 4: classify. Branch on `threshold_kind` — exactly mirrors the engine
     // condition `matches!(class, AssetClass::StableCdp) && asset == "hyUSD"`.
