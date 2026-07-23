@@ -23,7 +23,13 @@ name        = "pegana-replay"
 # behavior change; verify() still exact-matches receipt.methodology_version
 # (ADR-0028) against the embedded 0.7.0. Older 0.6.1 receipts still need
 # `cargo install pegana-replay@0.4.4` pinned, same as before this bump.
-version     = "0.5.0"
+# v0.5.1 (2026-07-23): VERSION_MISMATCH hint now points to `cargo install
+# pegana-replay` (crates.io) instead of the dead `releases.pegana.xyz/install.sh`
+# (DNS 404) piped with a `PEGANA_REPLAY_VERSION` var the installer ignored — the
+# "verify it yourself" remediation was broken for the common mismatch case. Docs-
+# /hint-only; no methodology, receipt-schema, or verify behavior change (still
+# embeds methodology 0.7.0, exact-match per ADR-0028).
+version     = "0.5.1"
 edition     = "2021"
 description = "Recomputes a Pegana alert receipt's canonical SHA-256 and, by default, cross-checks its on-chain SPL Memo anchor against a pinned signer (skip via --offline); re-derives the verdict from frozen inputs for schema-v2 receipts."
 license     = "MIT"
