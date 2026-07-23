@@ -13,6 +13,13 @@ pub const STATE_REASON_PREMIUM_SANITY: &str = "premium_sanity";
 
 pub const STATE_REASON_DISCOUNT_SANITY: &str = "discount_sanity";
 
+/// Emitted by the engine when the Pyth confidence-gate override forces the
+/// verdict to UNKNOWN (a cached Pyth reading's confidence/price ratio exceeded
+/// `PYTH_CONFIDENCE_GATE_BPS`). Mirrors `Receipt.state_reason` and
+/// `discount_snapshots.state_reason`, same shape as
+/// `STATE_REASON_PREMIUM_SANITY`/`STATE_REASON_DISCOUNT_SANITY`. See ADR-0032.
+pub const STATE_REASON_PYTH_CONFIDENCE_GATE: &str = "pyth_confidence_gate";
+
 /// Synthesized by the API layer (not the engine) when the most-recent
 /// discount snapshot is older than 15 minutes (stale feed). The state is
 /// collapsed from the stored value to UNKNOWN. The API SQL uses the string
@@ -20,6 +27,13 @@ pub const STATE_REASON_DISCOUNT_SANITY: &str = "discount_sanity";
 /// Not present in engine receipts — the engine stops writing when data is
 /// absent, so a stale row implies the engine saw a dead feed, not a decision.
 pub const STATE_REASON_STALE_SOURCE: &str = "stale_source";
+
+/// Emitted by the engine when the intrinsic-liveness gate (ADR-0038) forces the
+/// verdict to UNKNOWN — the receipt froze `intrinsic_stale = true` (a sanctum_lst
+/// the directory flags `stale`, or a stalled SPL stake-pool crank). Only present
+/// on receipts emitted with `INTRINSIC_LIVENESS_GATE` enabled; the gate ships
+/// disabled by default. Same shape as the other override reasons.
+pub const STATE_REASON_INTRINSIC_LIVENESS: &str = "intrinsic_liveness";
 
 pub mod canonical;
 pub mod discount;
@@ -37,9 +51,11 @@ pub use receipt::{Computed, InputsFrozen, PythEntry, Receipt};
 pub use rederive::{rederive, MethodologyRederiveError, Rederived};
 pub use thresholds::{
     classify_cr_with_hysteresis, classify_with_hysteresis, discount_sanity_violated,
-    is_direction_sensitive, next_worse_cr_band, premium_sanity_violated, state_for_bps_discount,
-    state_for_bps_discount_aware, state_for_cr, CR_DEADBAND_PCT, DEADBAND_PCT,
-    NAV_DISCOUNT_SANITY_BPS, NAV_PREMIUM_SANITY_BPS,
+    intrinsic_liveness_gate_violated, is_direction_sensitive, next_worse_cr_band,
+    override_final_state, override_final_state_attributed, premium_sanity_violated,
+    pyth_confidence_gate_violated, state_for_bps_discount, state_for_bps_discount_aware,
+    state_for_cr, OverrideReason, CR_DEADBAND_PCT, DEADBAND_PCT, NAV_DISCOUNT_SANITY_BPS,
+    NAV_PREMIUM_SANITY_BPS, PYTH_CONFIDENCE_GATE_BPS,
 };
 pub use transition::{transition_decide, TransitionDecision};
 pub use version::{methodology_git_sha, methodology_version};

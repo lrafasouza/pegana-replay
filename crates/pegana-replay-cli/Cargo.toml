@@ -11,9 +11,21 @@ name        = "pegana-replay"
 # install pegana-replay@0.4.3` for 0.6.0, `@0.4.2` for 0.5.0, `@0.4.1` for
 # 0.4.0. The installer fetches the LATEST release so `curl|sh` ships this
 # (0.6.1) binary; older receipts need the pin.
-version     = "0.4.4"
+# v0.5.0 (ADR-0033): --alert-id now verifies the on-chain anchor BY DEFAULT
+# (was opt-in via --verify-onchain). --offline is the new escape hatch for
+# CI / air-gapped hosts. --verify-onchain is kept as a back-compat no-op.
+# New exit code 5 = ONCHAIN_INCOMPLETE (RPC down, or anchor still pending
+# its 24h commit window) — distinct from exit 4 ONCHAIN_MISMATCH (a real
+# signer/memo failure). No methodology or receipt-schema change.
+# @0.5.0 also now embeds methodology 0.7.0 (Pyth confidence-gate, ADR-0032) —
+# same CLI binary/version as the ADR-0033 on-chain-by-default change above;
+# only the `pegana-methodology` dependency pin moved 0.6.1 -> 0.7.0. No CLI
+# behavior change; verify() still exact-matches receipt.methodology_version
+# (ADR-0028) against the embedded 0.7.0. Older 0.6.1 receipts still need
+# `cargo install pegana-replay@0.4.4` pinned, same as before this bump.
+version     = "0.5.0"
 edition     = "2021"
-description = "Verifies a Pegana alert's canonical receipt hash and its signer-pinned on-chain anchor (tamper-evidence for every receipt), and independently re-derives the verdict from the frozen inputs for schema-v2 receipts."
+description = "Recomputes a Pegana alert receipt's canonical SHA-256 and, by default, cross-checks its on-chain SPL Memo anchor against a pinned signer (skip via --offline); re-derives the verdict from frozen inputs for schema-v2 receipts."
 license     = "MIT"
 repository  = "https://github.com/lrafasouza/pegana-replay"
 keywords    = ["pegana", "audit", "verify", "solana"]
@@ -29,18 +41,16 @@ name = "pegana-replay"
 path = "src/main.rs"
 
 [dependencies]
-pegana-methodology   = { path = "../methodology", version = "0.6.1" }
+pegana-methodology   = { path = "../methodology", version = "0.7.0" }
 # Public carve-out (replaces pegana-common). The replay CLI only touches the
 # verifier-safe types (AssetsFile parsing, AlertEvidence deserialization);
 # server-side primitives stay in the closed pegana-common crate.
 pegana-common-verify = { path = "../common-verify", version = "0.1.0" }
 clap               = { version = "4", features = ["derive", "env"] }
 reqwest            = { workspace = true }
-serde              = { workspace = true }
 serde_json         = { workspace = true }
 tokio              = { workspace = true, features = ["rt-multi-thread", "macros"] }
 anyhow             = { workspace = true }
-similar            = "2"
 uuid               = { workspace = true }
 solana-client            = { workspace = true }
 solana-sdk               = { workspace = true }
@@ -52,3 +62,9 @@ tempfile     = "3"
 chrono       = { workspace = true }
 rust_decimal = { workspace = true }
 toml         = { workspace = true }
+tokio        = { workspace = true, features = ["macros", "rt-multi-thread"] }
+wiremock     = "0.6"
+# Test-only: builds a real EncodedConfirmedTransactionWithStatusMeta fixture
+# for the mocked Solana JSON-RPC getTransaction response (ParsedAccount /
+# ParsedInstruction aren't re-exported by solana-transaction-status itself).
+solana-transaction-status-client-types = "2"

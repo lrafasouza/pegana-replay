@@ -1,5 +1,35 @@
 # pegana-methodology changelog
 
+## 0.7.0 — 2026-07-16
+
+Behavior change (MINOR). Pyth confidence-gate —
+`pyth_confidence_gate_violated` + `PYTH_CONFIDENCE_GATE_BPS = 500`. A third,
+independent override alongside `premium_sanity_violated`/
+`discount_sanity_violated`: when a cached Pyth reading an asset depends on
+(intrinsic and/or market leg) has a confidence/price ratio wider than 500 bps
+(5%), the verdict is forced to honest-dark UNKNOWN rather than trusting a
+possibly-wrong intrinsic/market leg. Conservative-only — can only push a
+verdict *toward* UNKNOWN, never away from it. Class-agnostic (unlike the
+direction-sensitive-gated premium/discount sanity checks): a wide confidence
+interval taints trust in the reading regardless of asset class.
+
+`oracle_snapshots.confidence` has been captured and persisted since day one
+(no indexer/schema change needed); every receipt already freezes the exact
+Pyth entries an asset depended on (`InputsFrozen.pyth_entries`, schema v2), so
+this gate is byte-exact replayable offline with no new frozen field. Today's
+existing `pyth_confidence_label` (`high`/`medium`/`low`/`unknown`) stays
+display-only and unchanged — this is a separate, verdict-affecting function.
+
+`PYTH_CONFIDENCE_GATE_BPS = 500` is a conservative STARTING default (5x the
+existing "low" display bucket's own 100bps cut point), not a Pyth-mandated
+number — Pyth's own best-practices docs frame confidence-interval usage as
+application-dependent, not a fixed ratio. Structurally inert on the
+2025-10-10 backtest (the runner's `pyth_entries` stays `HashMap::new()` by
+construction — zero captured Pyth data in that fixture), so the golden
+replay diff is limited to `methodology_version` + `expected_receipt_sha256`.
+Calibration against the live `oracle_snapshots` universe (Query A/B) is the
+founder's call before/soon after deploy. See ADR-0032.
+
 ## 0.6.1 — 2026-07-08
 
 Bug fix (PATCH — no API signature change, unlike 0.6.0). Follow-up to 0.6.0:

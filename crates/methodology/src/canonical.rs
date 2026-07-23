@@ -88,6 +88,7 @@ mod tests {
             pyth_entries: HashMap::new(),
             confirm_up_secs: 30,
             decay_down_secs: 120,
+            intrinsic_stale: false,
         }
     }
 
@@ -107,6 +108,51 @@ mod tests {
         assert_eq!(
             canonical_assets_hash(with_comment).unwrap(),
             canonical_assets_hash(without).unwrap()
+        );
+    }
+
+    // ADR-0038 byte-exactness invariant: `intrinsic_stale=false` (the only value
+    // emitted while the gate is disabled) is OMITTED from the canonical JCS, so
+    // every pre-existing receipt + the backtest golden hash byte-identically. A
+    // `true` value is present (it MUST be, so a stale-forced UNKNOWN is
+    // tamper-evident + re-derivable). This is what makes the disabled gate
+    // provably inert at the hash level, not just the verdict level.
+    #[test]
+    fn intrinsic_stale_false_is_omitted_from_canonical_hash() {
+        let false_inputs = sample_inputs(); // intrinsic_stale: false
+        let jcs_false = serde_json_canonicalizer::to_string(&false_inputs).unwrap();
+        assert!(
+            !jcs_false.contains("intrinsic_stale"),
+            "false must be omitted for byte-exactness; got: {jcs_false}"
+        );
+
+        let mut true_inputs = sample_inputs();
+        true_inputs.intrinsic_stale = true;
+        let jcs_true = serde_json_canonicalizer::to_string(&true_inputs).unwrap();
+        assert!(
+            jcs_true.contains("intrinsic_stale"),
+            "true must be present so the gated verdict is tamper-evident"
+        );
+
+        // And the hashes differ ONLY because of that field — false hashes like
+        // a receipt that never had the field.
+        assert_ne!(
+            canonical_receipt_hash(
+                "0.7.0",
+                None,
+                "[[assets]]\n",
+                &false_inputs,
+                &sample_computed()
+            )
+            .unwrap(),
+            canonical_receipt_hash(
+                "0.7.0",
+                None,
+                "[[assets]]\n",
+                &true_inputs,
+                &sample_computed()
+            )
+            .unwrap(),
         );
     }
 
@@ -277,6 +323,7 @@ mod tests {
                 pyth_entries: HashMap::new(),
                 confirm_up_secs: 30,
                 decay_down_secs: 120,
+                intrinsic_stale: false,
             };
             let computed = crate::receipt::Computed {
                 discount_raw:    Decimal::new(intrinsic_int - market_int, 4),

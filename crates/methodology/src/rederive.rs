@@ -9,15 +9,23 @@
 //!
 //! - `discount_raw` — compute_discount from frozen intrinsic/market prices.
 //! - `discount_smooth` — one EWMA step from frozen `ewma_prev` + frozen `alpha`.
-//! - `final_state` — classify then transition then NAV-sanity override.
+//! - `final_state` — classify then transition then NAV-sanity override. As of
+//!   ADR-0032, `final_state` also factors `pyth_confidence_gate_violated(&inputs.pyth_entries)`:
+//!   a wide confidence/price ratio on any frozen Pyth reading forces UNKNOWN,
+//!   conservative-only (never upgrades a verdict, only degrades), same shape
+//!   as the premium/discount sanity overrides.
 //!
 //! # What is NOT re-derived (intentionally deferred)
 //!
-//! `confidence_label` is intentionally excluded. Its engine resolver reads
-//! `Utc::now()` to gate Pyth feed staleness, making it non-reproducible offline.
-//! Option-B follow-up: move the label computation fully into methodology so it
-//! can take an explicit `now` — at that point it can be frozen and verified here.
-//! Until then, only `(discount_raw, discount_smooth, final_state)` are verified.
+//! `confidence_label` (the display-only `high`/`medium`/`low`/`unknown` string) is
+//! intentionally excluded. Its engine resolver reads `Utc::now()` to gate Pyth feed
+//! staleness, making it non-reproducible offline. Option-B follow-up: move the label
+//! computation fully into methodology so it can take an explicit `now` — at that point
+//! it can be frozen and verified here. Until then, only `(discount_raw, discount_smooth,
+//! final_state)` are verified. This NOT-re-derived note applies ONLY to that display
+//! string — it does NOT apply to the verdict itself: `pyth_confidence_gate_violated`
+//! reads `inputs.pyth_entries`, which IS already frozen (schema v2), so the gate's
+//! effect on `final_state` is fully re-derivable here.
 //!
 //! # Schema v2
 //!
@@ -30,8 +38,8 @@
 
 use crate::{
     apply_ewma_pure, classify_cr_with_hysteresis, classify_with_hysteresis, compute_discount,
-    discount_sanity_violated, is_plausible_discount_sample, premium_sanity_violated,
-    receipt::InputsFrozen, transition_decide, CR_DEADBAND_PCT, DEADBAND_PCT,
+    is_plausible_discount_sample, override_final_state, receipt::InputsFrozen, transition_decide,
+    CR_DEADBAND_PCT, DEADBAND_PCT,
 };
 use pegana_common_verify::PegState;
 use rust_decimal::Decimal;
@@ -85,7 +93,11 @@ pub struct Rederived {
 /// 3. `apply_ewma_pure` → `discount_smooth`
 /// 4. `classify_with_hysteresis` / `classify_cr_with_hysteresis` → `candidate`
 /// 5. `transition_decide` → `final_state`
-/// 6. `premium_sanity_violated` / `discount_sanity_violated` override → `Unknown`
+/// 6. override → `Unknown` when ANY of: `premium_sanity_violated` /
+///    `discount_sanity_violated` / `pyth_confidence_gate_violated` /
+///    `intrinsic_liveness_gate_violated(inputs.intrinsic_stale)` (ADR-0038 —
+///    a frozen stale backing; `intrinsic_stale` is false on every receipt
+///    emitted while the engine's gate is disabled, so this is inert by default)
 ///
 /// # GAP-3 / `previous_state` semantics
 ///
@@ -164,16 +176,21 @@ pub fn rederive(inputs: &InputsFrozen) -> Result<Rederived, MethodologyRederiveE
     );
     let mut final_state = decision.new_last_state;
 
-    // Step 6: NAV-sanity override. Mirrors the premium/discount sanity
-    // block in `try_recompute` (after `transition`, same engine ordering):
-    // `if *_sanity_violated(asset_cfg.class, new_smooth) { final_state = Unknown }`.
-    // state_reason is out-of-hash (only final_state matters for re-derivation), so
-    // both sanity violations collapse to the same Unknown here.
-    if premium_sanity_violated(inputs.class, discount_smooth)
-        || discount_sanity_violated(inputs.class, discount_smooth)
-    {
-        final_state = PegState::Unknown;
-    }
+    // Step 6: the honest-dark UNKNOWN override + BLACK_SWAN carve-out, via the SHARED
+    // `override_final_state`. All THREE implementations derive the published state from
+    // this one function — re-derivation and the xtask backtest runner call it directly;
+    // the live engine `try_recompute` calls its attributed sibling
+    // `override_final_state_attributed` (same gate order + carve-out, plus the reason it
+    // keys force_unknown/metrics/state_reason off) — so they agree BY CONSTRUCTION and
+    // cannot drift. (A confirmed BLACK_SWAN yields to none of the three feed/value gates;
+    // premium-sanity stays unconditional — ADR-0039 extended.)
+    final_state = override_final_state(
+        inputs.class,
+        discount_smooth,
+        &inputs.pyth_entries,
+        inputs.intrinsic_stale,
+        final_state,
+    );
 
     Ok(Rederived {
         discount_raw,
@@ -233,6 +250,7 @@ mod tests {
             pyth_entries: HashMap::new(),
             confirm_up_secs: 30,
             decay_down_secs: 120,
+            intrinsic_stale: false,
         }
     }
 
@@ -244,6 +262,176 @@ mod tests {
         assert_eq!(r.discount_raw, Decimal::ZERO);
         assert_eq!(r.discount_smooth, Decimal::ZERO); // cold-start seeds at raw
         assert_eq!(r.final_state, PegState::Pegged);
+    }
+
+    // Intrinsic-liveness gate (ADR-0038): a frozen `intrinsic_stale=true` forces
+    // UNKNOWN even on an otherwise-PEGGED asset — the frozen-backing (dSOL) mode.
+    #[test]
+    fn intrinsic_liveness_gate_forces_unknown_when_stale() {
+        let mut inputs = base_inputs(AssetClass::Lst, "bps");
+        // Perfectly at NAV → would be PEGGED without the gate.
+        assert_eq!(
+            rederive(&inputs).unwrap().final_state,
+            PegState::Pegged,
+            "sanity: healthy LST is PEGGED with the gate off (field false)"
+        );
+        inputs.intrinsic_stale = true;
+        assert_eq!(
+            rederive(&inputs).unwrap().final_state,
+            PegState::Unknown,
+            "a stale backing must force UNKNOWN"
+        );
+    }
+
+    // Provably inert when false: the gate never changes a verdict for the
+    // default value (which is the ONLY value emitted while the engine's feature
+    // flag is disabled → byte-exact receipts).
+    #[test]
+    fn intrinsic_liveness_gate_is_inert_when_false() {
+        for class in [
+            AssetClass::Lst,
+            AssetClass::StableFiat,
+            AssetClass::StableDn,
+        ] {
+            let mut inputs = base_inputs(class, "bps");
+            inputs.market_usd = Decimal::from_str("0.997").unwrap(); // some drift
+            let with_default = rederive(&inputs).unwrap();
+            inputs.intrinsic_stale = false; // explicit default
+            let explicit_false = rederive(&inputs).unwrap();
+            assert_eq!(
+                with_default.final_state, explicit_false.final_state,
+                "{class:?}: intrinsic_stale=false must not alter the verdict"
+            );
+        }
+    }
+
+    // ── NAV-sanity ↔ BLACK_SWAN collision (ADR-0039) ────────────────────────────
+    // A discount beyond NAV_DISCOUNT_SANITY_BPS (3000 = 30%) used to be force-
+    // downgraded to UNKNOWN UNCONDITIONALLY. For JLP (critical=1500 → default
+    // black_swan = critical*2 = 3000, numerically EQUAL to the sanity bound) this
+    // masked a real >30% catastrophic collapse as UNKNOWN forever — the product
+    // showing "data looks unreliable" during the exact catastrophe it exists to
+    // call. The fix: discount-sanity YIELDS to a hysteresis-CONFIRMED BLACK_SWAN.
+
+    // Mirrors assets.toml JLP: {drift=200, depeg=500, critical=1500}, NO black_swan
+    // override → default = critical*2 = 3000 = NAV_DISCOUNT_SANITY_BPS (the collision).
+    fn jlp_like_thresholds() -> HashMap<String, u32> {
+        let mut m = HashMap::new();
+        m.insert("drift".into(), 200);
+        m.insert("depeg".into(), 500);
+        m.insert("critical".into(), 1500);
+        m
+    }
+
+    // A direction-sensitive asset at a 31% discount (3100 bps): market 0.69 vs
+    // intrinsic 1.0. 3100 > NAV_DISCOUNT_SANITY_BPS(3000) → sanity fires; and
+    // 3100 >= default black_swan(3000) → the band classifies BLACK_SWAN.
+    fn catastrophe_inputs() -> InputsFrozen {
+        let mut inputs = base_inputs(AssetClass::Lst, "bps");
+        inputs.thresholds = jlp_like_thresholds();
+        inputs.market_usd = Decimal::from_str("0.69").unwrap();
+        inputs
+    }
+
+    #[test]
+    fn nav_sanity_yields_to_confirmed_blackswan() {
+        // A >30% collapse that has MATURED through the confirm window (candidate
+        // BLACK_SWAN since well past confirm_up=30s) must publish BLACK_SWAN — the
+        // real catastrophic depeg — NOT the old force-masked UNKNOWN.
+        let mut inputs = catastrophe_inputs();
+        inputs.previous_state = PegState::Critical;
+        inputs.candidate_state = Some(PegState::BlackSwan);
+        inputs.candidate_since = Some(fixed_now() - Duration::seconds(60));
+        let r = rederive(&inputs).unwrap();
+        assert_eq!(r.discount_smooth, Decimal::from_str("0.31").unwrap());
+        assert_eq!(
+            r.final_state,
+            PegState::BlackSwan,
+            "a confirmed >30% collapse must surface BLACK_SWAN, not be masked UNKNOWN"
+        );
+    }
+
+    #[test]
+    fn nav_sanity_masks_maturing_catastrophe_as_unknown() {
+        // Same extreme discount, but the BLACK_SWAN candidate has NOT yet matured
+        // → honest-dark UNKNOWN while the confirm window runs (could still be a
+        // garbage-HIGH NAV print). Crucially never a false PEGGED/CRITICAL.
+        let mut inputs = catastrophe_inputs();
+        inputs.previous_state = PegState::Critical;
+        inputs.candidate_state = Some(PegState::BlackSwan);
+        inputs.candidate_since = Some(fixed_now()); // 0s elapsed < confirm_up
+        assert_eq!(rederive(&inputs).unwrap().final_state, PegState::Unknown);
+    }
+
+    #[test]
+    fn nav_sanity_masks_first_sighting_as_unknown() {
+        // First sighting of the extreme discount from PEGGED (no prior candidate)
+        // → UNKNOWN, never a false PEGGED off the untrusted reading. The live
+        // engine keeps the freshly-queued BLACK_SWAN candidate maturing so a
+        // SUSTAINED collapse later confirms (proven by the confirmed test above).
+        let inputs = catastrophe_inputs();
+        assert_eq!(rederive(&inputs).unwrap().final_state, PegState::Unknown);
+    }
+
+    // ── The carve-out extends to ALL gates (P1 audit 2026-07-18) ─────────────────
+    // A wide Pyth confidence interval is the DOCUMENTED signature of the high
+    // volatility that PRODUCES a crash — correlated, not orthogonal — so leaving the
+    // Pyth (and intrinsic-liveness) gate unconditional re-masked a confirmed collapse
+    // as UNKNOWN forever via a side door. `override_final_state` now exempts a
+    // hysteresis-confirmed BLACK_SWAN from all three feed/value gates.
+
+    // Confidence/price = 0.10/1.0 = 1000 bps > the 500 bps PYTH_CONFIDENCE_GATE_BPS.
+    fn wide_pyth() -> HashMap<String, crate::receipt::PythEntry> {
+        HashMap::from([(
+            "SOL/USD".to_string(),
+            crate::receipt::PythEntry {
+                price: Decimal::ONE,
+                confidence: Decimal::from_str("0.10").unwrap(),
+                publish_time: fixed_now(),
+            },
+        )])
+    }
+
+    #[test]
+    fn confirmed_blackswan_survives_wide_pyth_confidence() {
+        // A CONFIRMED >30% collapse must still publish BLACK_SWAN even though the
+        // shared numéraire feed's confidence is simultaneously wide (same market
+        // stress). Without the carve-out this reproduced the pre-ADR-0039 "masked
+        // forever" bug through the Pyth gate.
+        let mut inputs = catastrophe_inputs();
+        inputs.previous_state = PegState::Critical;
+        inputs.candidate_state = Some(PegState::BlackSwan);
+        inputs.candidate_since = Some(fixed_now() - Duration::seconds(60));
+        inputs.pyth_entries = wide_pyth();
+        assert_eq!(
+            rederive(&inputs).unwrap().final_state,
+            PegState::BlackSwan,
+            "confirmed BLACK_SWAN must survive a wide Pyth confidence interval"
+        );
+    }
+
+    #[test]
+    fn maturing_blackswan_with_wide_pyth_is_unknown() {
+        // Not-yet-confirmed → honest-dark UNKNOWN (the gate still protects an
+        // unconfirmed reading); the candidate is preserved so it can still mature.
+        let mut inputs = catastrophe_inputs();
+        inputs.previous_state = PegState::Critical;
+        inputs.candidate_state = Some(PegState::BlackSwan);
+        inputs.candidate_since = Some(fixed_now());
+        inputs.pyth_entries = wide_pyth();
+        assert_eq!(rederive(&inputs).unwrap().final_state, PegState::Unknown);
+    }
+
+    #[test]
+    fn confirmed_blackswan_survives_stale_intrinsic() {
+        // The intrinsic-liveness gate (ADR-0038) analog: a stale backing must not
+        // erase a sustained, confirmed catastrophic collapse either.
+        let mut inputs = catastrophe_inputs();
+        inputs.previous_state = PegState::Critical;
+        inputs.candidate_state = Some(PegState::BlackSwan);
+        inputs.candidate_since = Some(fixed_now() - Duration::seconds(60));
+        inputs.intrinsic_stale = true;
+        assert_eq!(rederive(&inputs).unwrap().final_state, PegState::BlackSwan);
     }
 
     // (b) USD stable crossing into DRIFT — 30bps discount, previous PEGGED.
@@ -376,6 +564,55 @@ mod tests {
         inputs.candidate_since = Some(fixed_now() - Duration::seconds(31));
         let r = rederive(&inputs).expect("should succeed");
         assert_eq!(r.final_state, PegState::Critical);
+    }
+
+    // ── Pyth confidence-gate (ADR-0032, 2026-07-16) ────────────────────────
+
+    fn pyth_entry(price: &str, confidence: &str) -> crate::receipt::PythEntry {
+        crate::receipt::PythEntry {
+            price: Decimal::from_str(price).unwrap(),
+            confidence: Decimal::from_str(confidence).unwrap(),
+            publish_time: fixed_now(),
+        }
+    }
+
+    // (g) Pyth confidence-gate override: a healthy discount that would
+    // otherwise classify PEGGED/DRIFT is forced to Unknown by a single
+    // wide-confidence frozen Pyth entry.
+    #[test]
+    fn pyth_confidence_gate_override_to_unknown() {
+        let mut inputs = base_inputs(AssetClass::StableFiat, "bps");
+        // market at intrinsic → discount = 0 (would classify PEGGED).
+        let mut entries = HashMap::new();
+        entries.insert("FEED".to_string(), pyth_entry("1.0", "0.06")); // 600bps > 500bps gate
+        inputs.pyth_entries = entries;
+        let r = rederive(&inputs).expect("should succeed");
+        assert_eq!(r.final_state, PegState::Unknown);
+    }
+
+    // (h) A tight-confidence Pyth entry must NOT force Unknown — proves the
+    // gate doesn't leak into unrelated (healthy) ticks.
+    #[test]
+    fn pyth_confidence_gate_allows_tight_confidence_to_classify() {
+        let mut inputs = base_inputs(AssetClass::StableFiat, "bps");
+        let mut entries = HashMap::new();
+        entries.insert("FEED".to_string(), pyth_entry("1.0", "0.0005")); // 5bps
+        inputs.pyth_entries = entries;
+        let r = rederive(&inputs).expect("should succeed");
+        assert_eq!(r.final_state, PegState::Pegged);
+    }
+
+    // (i) No frozen Pyth entries (empty map) — the common no-Pyth-dependency
+    // and backtest-fixture case — must classify exactly as before the gate
+    // existed. This is the test that pins the backtest's zero-diff guarantee:
+    // the xtask runner freezes `pyth_entries: HashMap::new()` (runner.rs:149),
+    // so the gate must be a structural no-op there.
+    #[test]
+    fn pyth_confidence_gate_inert_when_no_pyth_entries_frozen() {
+        let inputs = base_inputs(AssetClass::StableFiat, "bps");
+        assert!(inputs.pyth_entries.is_empty());
+        let r = rederive(&inputs).expect("should succeed");
+        assert_eq!(r.final_state, PegState::Pegged);
     }
 
     // (f) Cold-start: previous_state = Pegged (default), candidate_state = None.

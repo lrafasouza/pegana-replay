@@ -45,10 +45,31 @@ pub fn transition_decide(
         };
     }
 
-    // Case 2: a different candidate from the one we were tracking → reset
-    // the timer. Either it's new entirely or the prior candidate matured
-    // into something else.
-    if prev_candidate_state != Some(candidate) {
+    let escalating = strictness > current_strictness;
+
+    // The confirm/decay window measures continuous time spent on the SAME SIDE
+    // of the committed state (escalation vs relaxation), NOT time at one exact
+    // band. Reset the timer ONLY when there is no prior candidate on the same
+    // side; a same-side hop keeps the window running and commits to the CURRENT
+    // band once it matures.
+    //
+    // Case 2 used to reset on ANY candidate change. That silently broke on a
+    // discount oscillating between two ALERTING bands (e.g. DRIFT↔DEPEG, both
+    // stricter than a PEGGED commit): each tick's candidate differed from the
+    // last, so the timer reset every tick and NEITHER band ever confirmed — the
+    // engine held/published PEGGED indefinitely while the asset was continuously
+    // unhealthy (audit 2026-07-18). The deadband fix (ADR-0021/0023) only smooths
+    // oscillation at the single PEGGED↔first-band boundary; between-band flapping
+    // higher up was never covered. Same-side continuity closes it.
+    let same_side = match prev_candidate_state {
+        Some(prev) => (state_strictness(prev) > current_strictness) == escalating,
+        None => false,
+    };
+
+    // Case 2: no prior candidate on this side (first sighting, or the side just
+    // flipped) → start a fresh window. Never commits immediately (guards
+    // no_spontaneous_escalation_on_timer_reset).
+    if !same_side {
         return TransitionDecision {
             new_last_state: current_last_state,
             new_candidate_state: Some(candidate),
@@ -56,11 +77,12 @@ pub fn transition_decide(
         };
     }
 
-    // Case 3: same candidate as before. Compare elapsed time vs the
-    // appropriate window — stricter requires confirm_up_secs, looser
-    // (towards PEGGED) requires decay_down_secs.
+    // Case 3: same side as the tracked candidate → the window keeps running.
+    // Escalation needs confirm_up_secs, relaxation (towards PEGGED) decay_down_secs.
+    // Commit to the CURRENT candidate once matured; else hold, but track the
+    // current band so maturity commits to where the signal is NOW.
     let since = prev_candidate_since.unwrap_or(now);
-    let needed = if strictness > current_strictness {
+    let needed = if escalating {
         confirm_up_secs
     } else {
         decay_down_secs
@@ -74,7 +96,7 @@ pub fn transition_decide(
     } else {
         TransitionDecision {
             new_last_state: current_last_state,
-            new_candidate_state: prev_candidate_state,
+            new_candidate_state: Some(candidate),
             new_candidate_since: prev_candidate_since,
         }
     }
@@ -380,5 +402,42 @@ mod tests {
             120,
         );
         assert_eq!(r2.new_last_state, PegState::Pegged);
+    }
+
+    /// REGRESSION (audit 2026-07-18): a discount oscillating between two
+    /// ALERTING bands (DRIFT↔DEPEG, both stricter than a PEGGED commit) must
+    /// eventually commit an alerting state, not hold PEGGED forever. Before the
+    /// same-side-continuity fix, each tick's candidate differed from the last so
+    /// the confirm timer reset every tick and NEITHER band matured — the engine
+    /// held PEGGED indefinitely while the asset was continuously unhealthy.
+    #[test]
+    fn oscillation_between_alerting_bands_still_commits() {
+        let epoch = base_epoch();
+        let mut committed = PegState::Pegged;
+        let mut cand_state: Option<PegState> = None;
+        let mut cand_since: Option<DateTime<Utc>> = None;
+        // 20 ticks, 5s apart, alternating DRIFT/DEPEG — 100s of continuous
+        // alerting-band flapping (confirm_up = 30s).
+        for i in 0..20i64 {
+            let candidate = if i % 2 == 0 {
+                PegState::Drift
+            } else {
+                PegState::Depeg
+            };
+            let now = epoch + Duration::seconds(i * 5);
+            let r = transition_decide(committed, candidate, cand_state, cand_since, now, 30, 120);
+            committed = r.new_last_state;
+            cand_state = r.new_candidate_state;
+            cand_since = r.new_candidate_since;
+        }
+        assert_ne!(
+            committed,
+            PegState::Pegged,
+            "oscillation between alerting bands must not hold PEGGED (the bug)"
+        );
+        assert!(
+            state_strictness(committed) >= state_strictness(PegState::Drift),
+            "committed {committed:?} must be at least DRIFT"
+        );
     }
 }

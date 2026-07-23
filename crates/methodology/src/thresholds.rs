@@ -1,5 +1,6 @@
 //! Threshold resolution per asset class.
 
+use crate::receipt::PythEntry;
 use pegana_common_verify::{AssetClass, PegState};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
@@ -34,6 +35,31 @@ pub const CR_DEADBAND_PCT: u32 = 2;
 ///     PEGGED instead of burning a 🚨 DRIFT.
 pub fn is_direction_sensitive(class: AssetClass) -> bool {
     matches!(class, AssetClass::StableYield | AssetClass::Lst)
+}
+
+/// Classes where a PREMIUM (market above NAV — a *negative* discount) carries
+/// no risk and normalizes to PEGGED instead of firing a risk state. Superset of
+/// [`is_direction_sensitive`], adding `SynthLev`: a leveraged token (xSOL)
+/// trades at large, LEGITIMATE premiums BY DESIGN (leverage demand in a rally),
+/// so a premium is never redemption stress here either — publishing DRIFT off a
+/// healthy +20% leverage premium is a category error (the market is not
+/// "drifting toward a depeg"; the token has no peg).
+///
+/// The deliberate distinction from `is_direction_sensitive`: `SynthLev` is NOT
+/// added to the premium/discount SANITY magnitude masks
+/// ([`premium_sanity_violated`] / [`discount_sanity_violated`]). For an LST or
+/// yield-stable a premium beyond ~10% means a BROKEN anchor (arbitrage caps
+/// real premiums in the low-hundreds of bps → UNKNOWN). A leveraged token's
+/// premium is genuinely unbounded and rides an on-chain reserve/supply NAV, so
+/// a large premium is REAL, not a broken anchor — masking it to UNKNOWN would
+/// just trade the false DRIFT for a false UNKNOWN. The discount side is
+/// deliberately left on the normal risk bands (a leveraged token trading BELOW
+/// NAV is genuine exit/redemption stress).
+pub fn premium_is_informational(class: AssetClass) -> bool {
+    matches!(
+        class,
+        AssetClass::StableYield | AssetClass::Lst | AssetClass::SynthLev
+    )
 }
 
 /// Maximum plausible PREMIUM (market above NAV/intrinsic — a *negative*
@@ -120,16 +146,193 @@ pub fn discount_sanity_violated(class: AssetClass, discount: Decimal) -> bool {
         .is_none_or(|bps| bps > Decimal::from(NAV_DISCOUNT_SANITY_BPS))
 }
 
-/// Direction-aware variant of `state_for_bps_discount`. For classes where
-/// only one side of the spread carries information (currently just
-/// `stable_yield`), a premium (negative discount) is normalized to PEGGED.
-/// For symmetric classes the function delegates to the abs() form.
+/// Widest 1-sigma Pyth confidence/price ratio (bps) treated as a trustworthy
+/// oracle read before the VERDICT itself is forced to UNKNOWN, distinct from
+/// the display-only `high`/`medium`/`low` bucket in
+/// `EngineState::pyth_confidence_label` (engine-rs/src/state.rs:374-401,
+/// cut points 10bps/100bps) which only labels a snapshot cosmetically.
+///
+/// Pyth deliberately does not publish one universal ratio — its own
+/// best-practices guidance (docs.pyth.network/price-feeds/core/best-practices)
+/// frames confidence-interval use as application-dependent (upper/lower-bound
+/// risk parameters), not a fixed cutoff. This default is therefore a
+/// CONSERVATIVE STARTING POINT mirroring the ADR-0025/ADR-0030 pattern (wide
+/// margin over normal, even noisy, operation) — 5x the existing "low" display
+/// bucket's own 100bps cut point — NOT a value Pyth prescribes. The founder
+/// MUST run the calibration query in docs/adr/0032-pyth-confidence-gate.md
+/// against `oracle_snapshots` before/soon after deploy to confirm near-zero
+/// historical trips (the ADR-0030 "provably inert" proof), and may tighten or
+/// widen this constant from that data.
+pub const PYTH_CONFIDENCE_GATE_BPS: u32 = 500;
+
+/// True when ANY cached Pyth reading this asset depends on (intrinsic AND
+/// market legs — both multiply into `discount_raw`, so a wide-uncertainty
+/// read on either side taints the verdict equally) has a confidence/price
+/// ratio wider than `PYTH_CONFIDENCE_GATE_BPS`.
+///
+/// Scope: judges only entries ACTUALLY PRESENT in `entries`. An asset with no
+/// Pyth dependency (empty map) or a feed whose live reading did not survive
+/// upstream staleness/missing-feed gating is left alone — that is a presence/
+/// absence question already owned by `pyth_confidence_label` and the
+/// intrinsic/market staleness gates (hardening H1/H9/H12: missing data is not
+/// confirming data, but it is also not *this* function's job to punish
+/// absence — it only judges reads it actually has, exactly like
+/// `premium_sanity_violated`/`discount_sanity_violated` judge only a real
+/// discount sample, never a missing one).
+///
+/// A zero price is skipped (no computable ratio, not evidence of anything).
+/// `checked_mul` overflow is treated as violated — same untrusted-magnitude
+/// reasoning as `premium_sanity_violated` (0.6.1 fix): an implausibly large
+/// scaled ratio is itself proof the reading cannot be trusted.
+pub fn pyth_confidence_gate_violated(entries: &HashMap<String, PythEntry>) -> bool {
+    entries.values().any(|e| {
+        if e.price.is_zero() {
+            return false;
+        }
+        // checked_div, NOT raw `/`: a near-zero price overflows `Decimal` on
+        // divide, which PANICS (rust_decimal's `Div`, the audit F-12 class — see
+        // discount.rs). Reachable with no catch_unwind via the public verifier
+        // (rederive) on a crafted receipt AND via the live engine every tick, so
+        // a raw divide crash-loops the whole engine / crashes `pegana-replay`.
+        // An un-computable (overflowing) ratio is treated as gate-VIOLATED —
+        // never a panic — mirroring premium_sanity_violated/discount_sanity_violated.
+        let Some(ratio) = e.confidence.checked_div(e.price) else {
+            return true;
+        };
+        ratio
+            .abs()
+            .checked_mul(Decimal::from(10_000u32))
+            .is_none_or(|bps| bps > Decimal::from(PYTH_CONFIDENCE_GATE_BPS))
+    })
+}
+
+/// Intrinsic-liveness gate (ADR-0038): force UNKNOWN when the receipt froze a
+/// stale backing. `intrinsic_stale` is the frozen verdict — `flags.stale` for a
+/// sanctum_lst (its rate stopped advancing on-chain) or a stalled
+/// (`epoch_lag >= 2`) SPL stake-pool crank — the frozen-but-served backing that
+/// otherwise reads as a confident peg (the 2026-04-01 dSOL failure mode).
+///
+/// Pure + trivial BY DESIGN: the liveness DETERMINATION happens off the verdict
+/// path (the indexer sources + the `intrinsic_liveness` table), is frozen into
+/// the receipt by the engine ONLY when `INTRINSIC_LIVENESS_GATE` is enabled, and
+/// this gate just honours that frozen bit so `rederive` reproduces the verdict.
+/// A named predicate (not an inline `inputs.intrinsic_stale`) keeps it a single
+/// documented source alongside the other override gates.
+pub fn intrinsic_liveness_gate_violated(intrinsic_stale: bool) -> bool {
+    intrinsic_stale
+}
+
+/// SINGLE SOURCE OF TRUTH for the "force UNKNOWN" override chain + the BLACK_SWAN
+/// carve-out. Given the FSM-committed `final_state`, apply the four honest-dark gates
+/// (premium-sanity, discount-sanity, Pyth-confidence, intrinsic-liveness) and return the
+/// state that must actually be published.
+///
+/// Which feed/value-quality gate forced an UNKNOWN override, for the caller's
+/// diagnostics (`state_reason`) and per-gate metrics. Returned alongside the
+/// state by [`override_final_state_attributed`]. The precedence encoded there
+/// (premium → discount → Pyth → intrinsic) is the SINGLE source of truth for
+/// attribution, so a caller that layers side effects keyed off the reason can
+/// never drift from the published state it decided.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverrideReason {
+    /// Premium beyond `NAV_PREMIUM_SANITY_BPS` — a broken/suspect intrinsic anchor.
+    PremiumSanity,
+    /// Discount beyond `NAV_DISCOUNT_SANITY_BPS`, not (yet) a confirmed BLACK_SWAN.
+    DiscountSanity,
+    /// A required Pyth feed's confidence interval is too wide (ADR-0032).
+    PythConfidence,
+    /// The intrinsic backing is flagged stale (ADR-0038; gate opt-in).
+    IntrinsicLiveness,
+}
+
+/// The honest-dark UNKNOWN override + confirmed-BLACK_SWAN carve-out, returning
+/// BOTH the published state and WHICH gate fired.
+///
+/// A hysteresis-CONFIRMED `BlackSwan` yields NOTHING to ANY of the FOUR feed/value-quality
+/// gates (premium-sanity, discount-sanity, Pyth-confidence, intrinsic-liveness): a
+/// sustained, time-validated catastrophic collapse is real regardless of this tick's
+/// feed quality. This extends ADR-0039 (which covered only discount-sanity) to all gates:
+/// the P1 audit (2026-07-18) proved a wide Pyth confidence interval is the DOCUMENTED
+/// signature of the high volatility that PRODUCES a crash, and a follow-up audit-review
+/// found the LAST unconditional gate — `premium_sanity` — reopened the same bug: a single
+/// garbage-LOW NAV print during a confirmed DISCOUNT collapse reads as a huge apparent
+/// PREMIUM (market >> broken NAV) and re-masked the confirmed BLACK_SWAN as UNKNOWN + reset
+/// the FSM. The "cannot co-occur" argument only held for the *raw* candidate (a premium
+/// classifies to PEGGED, never a BlackSwan candidate) — NOT for the *committed* state,
+/// which can be BlackSwan from prior ticks while this tick's smoothed discount glitches
+/// negative. The market reality (crashed) is unchanged; only the NAV feed glitched, so the
+/// confirmed BLACK_SWAN survives all four gates now.
+///
+/// The live engine, `rederive`, and the xtask backtest runner ALL derive the published
+/// state from this ONE function, so the "three implementations agree by construction"
+/// trust invariant cannot drift (it drifted twice before this was centralized — the
+/// golden re-baseline debt and this very BLACK_SWAN carve-out gap). The engine additionally
+/// layers side effects (force_unknown / metrics / state_reason) keyed off the returned
+/// `OverrideReason` — never re-deriving the gate order — while `rederive`/runner take just
+/// the state via the [`override_final_state`] wrapper. The returned reason is `None` both
+/// when nothing fires AND when a gate fires but the confirmed-BLACK_SWAN carve-out keeps
+/// the state (there is no override to attribute in that case).
+pub fn override_final_state_attributed(
+    class: AssetClass,
+    discount_smooth: Decimal,
+    pyth_entries: &HashMap<String, PythEntry>,
+    intrinsic_stale: bool,
+    final_state: PegState,
+) -> (PegState, Option<OverrideReason>) {
+    // A confirmed BLACK_SWAN is exempt from ALL FOUR gates (see doc). Premium-sanity
+    // has no maturation nuance: a premium classifies to PEGGED, so it is never a
+    // BlackSwan *candidate* — the guard only protects an already-committed BlackSwan.
+    if final_state != PegState::BlackSwan {
+        if premium_sanity_violated(class, discount_smooth) {
+            return (PegState::Unknown, Some(OverrideReason::PremiumSanity));
+        }
+        if discount_sanity_violated(class, discount_smooth) {
+            return (PegState::Unknown, Some(OverrideReason::DiscountSanity));
+        }
+        if pyth_confidence_gate_violated(pyth_entries) {
+            return (PegState::Unknown, Some(OverrideReason::PythConfidence));
+        }
+        if intrinsic_liveness_gate_violated(intrinsic_stale) {
+            return (PegState::Unknown, Some(OverrideReason::IntrinsicLiveness));
+        }
+    }
+    (final_state, None)
+}
+
+/// State-only wrapper over [`override_final_state_attributed`] — the form
+/// `rederive` and the xtask backtest runner use (they don't attribute the
+/// reason). See that function for the full carve-out rationale.
+pub fn override_final_state(
+    class: AssetClass,
+    discount_smooth: Decimal,
+    pyth_entries: &HashMap<String, PythEntry>,
+    intrinsic_stale: bool,
+    final_state: PegState,
+) -> PegState {
+    override_final_state_attributed(
+        class,
+        discount_smooth,
+        pyth_entries,
+        intrinsic_stale,
+        final_state,
+    )
+    .0
+}
+
+/// Direction-aware variant of `state_for_bps_discount`. For classes where a
+/// premium (market above NAV) carries no risk signal — yield stables, LSTs, and
+/// leveraged synths (see [`premium_is_informational`]) — a premium (negative
+/// discount) normalizes to PEGGED. The discount side, and fully-symmetric
+/// classes, delegate to the abs() form. NOTE: leveraged synths reach PEGGED
+/// here at ANY premium magnitude — they are intentionally exempt from the
+/// premium-sanity UNKNOWN mask that guards LST/yield anchors — because a large
+/// leverage premium is legitimate, not a broken NAV.
 pub fn state_for_bps_discount_aware(
     class: AssetClass,
     discount: Decimal,
     thresholds: &HashMap<String, u32>,
 ) -> PegState {
-    if is_direction_sensitive(class) && discount < Decimal::ZERO {
+    if premium_is_informational(class) && discount < Decimal::ZERO {
         return PegState::Pegged;
     }
     state_for_bps_discount(discount, thresholds)
@@ -792,7 +995,10 @@ mod tests {
     fn bps_discount_between_decimal_and_u32_ceiling_saturates_to_black_swan() {
         let d = Decimal::from_str("59229100000000000000000").unwrap();
         assert!(d.checked_mul(Decimal::from(10_000u32)).is_some());
-        assert_eq!(state_for_bps_discount(d, &jup_thresholds()), PegState::BlackSwan);
+        assert_eq!(
+            state_for_bps_discount(d, &jup_thresholds()),
+            PegState::BlackSwan
+        );
     }
 
     /// Same untrusted-magnitude overflow, but through the NAV-sanity guards
@@ -912,6 +1118,349 @@ mod tests {
             AssetClass::StableFiat,
             Decimal::from_str("0.30").unwrap()
         )); // symmetric class: real 30% break stays CRITICAL/BLACK_SWAN
+    }
+
+    // ── Pyth confidence-gate (ADR-0032, 2026-07-16) ────────────────────────
+    // Conservative-only guard: a wide Pyth confidence/price ratio taints trust
+    // in the reading regardless of asset class, mirroring
+    // premium_sanity_violated/discount_sanity_violated's shape (empty/tight →
+    // false, wide/overflow → true).
+
+    fn pyth_entry(price: &str, confidence: &str) -> PythEntry {
+        PythEntry {
+            price: Decimal::from_str(price).unwrap(),
+            confidence: Decimal::from_str(confidence).unwrap(),
+            publish_time: chrono::DateTime::from_timestamp(1_704_067_200, 0).unwrap(),
+        }
+    }
+
+    #[test]
+    fn pyth_confidence_gate_inert_on_empty_map() {
+        assert!(!pyth_confidence_gate_violated(&HashMap::new()));
+    }
+
+    #[test]
+    fn pyth_confidence_gate_inert_on_tight_confidence() {
+        // price=1.0, confidence=0.0005 → 5bps, well under the 500bps gate.
+        let mut entries = HashMap::new();
+        entries.insert("FEED".to_string(), pyth_entry("1.0", "0.0005"));
+        assert!(!pyth_confidence_gate_violated(&entries));
+    }
+
+    #[test]
+    fn pyth_confidence_gate_fires_on_wide_confidence() {
+        // price=1.0, confidence=0.06 → 600bps > 500bps gate.
+        let mut entries = HashMap::new();
+        entries.insert("FEED".to_string(), pyth_entry("1.0", "0.06"));
+        assert!(pyth_confidence_gate_violated(&entries));
+    }
+
+    // ── override_final_state_attributed — state + attribution centralized ────────
+    // The published state AND which gate fired both come from this one function. The
+    // engine keys its force_unknown/metrics/state_reason side effects off the returned
+    // OverrideReason; `rederive` + the xtask runner take the state via the
+    // `override_final_state` wrapper. Locking the attribution + wrapper agreement here
+    // is what makes all three agree BY CONSTRUCTION — the drift this fn exists to end.
+
+    // A wide numéraire feed: 600bps > the 500bps PYTH_CONFIDENCE_GATE_BPS.
+    fn wide_conf() -> HashMap<String, PythEntry> {
+        HashMap::from([("SOL/USD".to_string(), pyth_entry("1.0", "0.06"))])
+    }
+
+    #[test]
+    fn attributed_names_the_gate_that_fired() {
+        let c = AssetClass::Lst; // direction-sensitive
+        let d = |s: &str| Decimal::from_str(s).unwrap();
+        // premium beyond bound (negative discount) → PremiumSanity.
+        assert_eq!(
+            override_final_state_attributed(c, d("-0.9"), &HashMap::new(), false, PegState::Pegged),
+            (PegState::Unknown, Some(OverrideReason::PremiumSanity)),
+        );
+        // discount beyond bound → DiscountSanity (state not BlackSwan).
+        assert_eq!(
+            override_final_state_attributed(c, d("0.9"), &HashMap::new(), false, PegState::Depeg),
+            (PegState::Unknown, Some(OverrideReason::DiscountSanity)),
+        );
+        // wide Pyth, benign discount → PythConfidence.
+        assert_eq!(
+            override_final_state_attributed(
+                c,
+                Decimal::ZERO,
+                &wide_conf(),
+                false,
+                PegState::Pegged
+            ),
+            (PegState::Unknown, Some(OverrideReason::PythConfidence)),
+        );
+        // stale intrinsic only → IntrinsicLiveness.
+        assert_eq!(
+            override_final_state_attributed(
+                c,
+                Decimal::ZERO,
+                &HashMap::new(),
+                true,
+                PegState::Pegged
+            ),
+            (PegState::Unknown, Some(OverrideReason::IntrinsicLiveness)),
+        );
+        // nothing fires → state carried through, no reason to attribute.
+        assert_eq!(
+            override_final_state_attributed(
+                c,
+                Decimal::ZERO,
+                &HashMap::new(),
+                false,
+                PegState::Drift
+            ),
+            (PegState::Drift, None),
+        );
+    }
+
+    #[test]
+    fn attributed_precedence_is_discount_then_pyth_then_intrinsic() {
+        let c = AssetClass::Lst;
+        // discount + pyth + intrinsic all fire → discount wins (checked first).
+        assert_eq!(
+            override_final_state_attributed(
+                c,
+                Decimal::from_str("0.9").unwrap(),
+                &wide_conf(),
+                true,
+                PegState::Depeg,
+            )
+            .1,
+            Some(OverrideReason::DiscountSanity),
+        );
+        // pyth + intrinsic fire → pyth wins.
+        assert_eq!(
+            override_final_state_attributed(c, Decimal::ZERO, &wide_conf(), true, PegState::Pegged)
+                .1,
+            Some(OverrideReason::PythConfidence),
+        );
+    }
+
+    #[test]
+    fn attributed_confirmed_blackswan_is_exempt_from_all_feed_gates() {
+        let c = AssetClass::Lst;
+        // A confirmed BLACK_SWAN yields to NONE of the four gates (ADR-0039 extended):
+        // discount-sanity / Pyth / intrinsic all violated, yet the state survives with
+        // no override to attribute. The "masked forever" regression's guard.
+        assert_eq!(
+            override_final_state_attributed(
+                c,
+                Decimal::from_str("0.9").unwrap(),
+                &wide_conf(),
+                true,
+                PegState::BlackSwan,
+            ),
+            (PegState::BlackSwan, None),
+        );
+        // Premium-sanity ALSO yields now (audit-review fix): a garbage-LOW NAV print
+        // during a confirmed collapse reads as a huge premium and MUST NOT re-mask the
+        // committed catastrophe as UNKNOWN — the exact ADR-0039 bug via the last gate.
+        assert_eq!(
+            override_final_state_attributed(
+                c,
+                Decimal::from_str("-0.9").unwrap(),
+                &HashMap::new(),
+                false,
+                PegState::BlackSwan,
+            ),
+            (PegState::BlackSwan, None),
+        );
+        // ...but on a NON-BlackSwan state the premium gate still masks (sanity intact).
+        assert_eq!(
+            override_final_state_attributed(
+                c,
+                Decimal::from_str("-0.9").unwrap(),
+                &HashMap::new(),
+                false,
+                PegState::Pegged,
+            ),
+            (PegState::Unknown, Some(OverrideReason::PremiumSanity)),
+        );
+    }
+
+    #[test]
+    fn override_final_state_wrapper_returns_the_attributed_state() {
+        let c = AssetClass::Lst;
+        let d = |s: &str| Decimal::from_str(s).unwrap();
+        let cases: [(Decimal, HashMap<String, PythEntry>, bool, PegState); 6] = [
+            (d("-0.9"), HashMap::new(), false, PegState::Pegged),
+            (d("0.9"), HashMap::new(), false, PegState::Depeg),
+            (Decimal::ZERO, wide_conf(), false, PegState::Pegged),
+            (Decimal::ZERO, HashMap::new(), true, PegState::Pegged),
+            (d("0.9"), wide_conf(), true, PegState::BlackSwan),
+            (Decimal::ZERO, HashMap::new(), false, PegState::Drift),
+        ];
+        for (disc, pyth, stale, fs) in cases {
+            assert_eq!(
+                override_final_state(c, disc, &pyth, stale, fs),
+                override_final_state_attributed(c, disc, &pyth, stale, fs).0,
+                "the state-only wrapper must equal the attributed state",
+            );
+        }
+    }
+
+    #[test]
+    fn pyth_confidence_gate_boundary_at_exact_threshold_does_not_fire() {
+        // price=1.0, confidence=0.05 → exactly 500bps. Strict `>`, matches
+        // premium_sanity_violated's `bps > NAV_PREMIUM_SANITY_BPS`.
+        let mut entries = HashMap::new();
+        entries.insert("FEED".to_string(), pyth_entry("1.0", "0.05"));
+        assert!(!pyth_confidence_gate_violated(&entries));
+    }
+
+    #[test]
+    fn pyth_confidence_gate_skips_zero_price() {
+        let mut entries = HashMap::new();
+        entries.insert("FEED".to_string(), pyth_entry("0", "1.0"));
+        assert!(!pyth_confidence_gate_violated(&entries));
+    }
+
+    #[test]
+    fn pyth_confidence_gate_overflow_treated_as_violated() {
+        // The DIVISION itself must succeed (ratio = 1e15 / 1e-12 = 1e27, well
+        // under Decimal::MAX ≈ 7.92e28) — it's the subsequent
+        // `checked_mul(10_000)` (1e27 * 1e4 = 1e31) that overflows, mirroring
+        // the existing overflow-as-violated pattern (thresholds.rs
+        // premium_and_discount_sanity_overflow_violates_not_panic).
+        let mut entries = HashMap::new();
+        entries.insert(
+            "FEED".to_string(),
+            PythEntry {
+                price: Decimal::from_str("0.000000000001").unwrap(),
+                confidence: Decimal::from_str("1000000000000000").unwrap(),
+                publish_time: chrono::DateTime::from_timestamp(1_704_067_200, 0).unwrap(),
+            },
+        );
+        assert!(pyth_confidence_gate_violated(&entries));
+    }
+
+    #[test]
+    fn pyth_confidence_gate_division_overflow_treated_as_violated_not_panic() {
+        // Audit F-12: a near-zero price makes `confidence / price` overflow
+        // Decimal, which the raw `/` operator PANICS on (crashing the public
+        // verifier + the live engine). With checked_div it must instead read as
+        // gate-VIOLATED (true) — no panic. price=1e-28, confidence=100 →
+        // ratio 1e30 > Decimal::MAX ≈ 7.92e28.
+        let mut entries = HashMap::new();
+        entries.insert(
+            "FEED".to_string(),
+            PythEntry {
+                price: Decimal::from_str("0.0000000000000000000000000001").unwrap(),
+                confidence: Decimal::from_str("100").unwrap(),
+                publish_time: chrono::DateTime::from_timestamp(1_704_067_200, 0).unwrap(),
+            },
+        );
+        assert!(
+            pyth_confidence_gate_violated(&entries),
+            "division overflow must read as violated, never panic"
+        );
+    }
+
+    #[test]
+    fn pyth_confidence_gate_any_one_of_multiple_feeds_trips_it() {
+        // .any() semantics — a single bad leg (e.g. a numéraire feed) can
+        // still degrade an otherwise-healthy asset.
+        let mut entries = HashMap::new();
+        entries.insert("TIGHT".to_string(), pyth_entry("1.0", "0.0005")); // 5bps
+        entries.insert("WIDE".to_string(), pyth_entry("1.0", "0.06")); // 600bps
+        assert!(pyth_confidence_gate_violated(&entries));
+    }
+
+    // ── SynthLev (leveraged, e.g. xSOL) direction-awareness — B, 2026-07-15 ──
+    // A leveraged token trades at large, LEGITIMATE premiums by design; a
+    // premium must read PEGGED (informational), never DRIFT — and, unlike an
+    // LST/yield, must NOT be masked to UNKNOWN by the premium-sanity bound (a
+    // big leverage premium is real, not a broken anchor). The DISCOUNT side
+    // keeps the normal risk bands (market below NAV = real exit stress).
+    #[test]
+    fn synth_lev_premium_is_pegged_at_any_magnitude() {
+        // +24% premium (the live xSOL reading) → PEGGED, not DRIFT.
+        assert_eq!(
+            state_for_bps_discount_aware(
+                AssetClass::SynthLev,
+                Decimal::from_str("-0.24").unwrap(),
+                &bps_thresholds()
+            ),
+            PegState::Pegged
+        );
+        // even an absurd +500% premium stays informational for a leveraged token.
+        assert_eq!(
+            state_for_bps_discount_aware(
+                AssetClass::SynthLev,
+                Decimal::from_str("-5.0").unwrap(),
+                &bps_thresholds()
+            ),
+            PegState::Pegged
+        );
+    }
+
+    #[test]
+    fn synth_lev_discount_still_classifies_on_bands() {
+        // market BELOW NAV = real exit/redemption stress → normal risk bands.
+        assert_eq!(
+            state_for_bps_discount_aware(
+                AssetClass::SynthLev,
+                Decimal::from_str("0.0150").unwrap(),
+                &bps_thresholds()
+            ),
+            PegState::Depeg
+        );
+        assert_eq!(
+            state_for_bps_discount_aware(
+                AssetClass::SynthLev,
+                Decimal::from_str("0.0010").unwrap(),
+                &bps_thresholds()
+            ),
+            PegState::Pegged
+        );
+    }
+
+    #[test]
+    fn synth_lev_premium_not_masked_to_unknown() {
+        // THE trap this fix avoids: a +24% premium exceeds NAV_PREMIUM_SANITY_BPS
+        // (1000 = 10%), but SynthLev is NOT direction-sensitive, so the sanity
+        // mask must NOT fire (which would force a false UNKNOWN instead of a real
+        // "broken anchor").
+        assert!(!premium_sanity_violated(
+            AssetClass::SynthLev,
+            Decimal::from_str("-0.24").unwrap()
+        ));
+        // contrast: the SAME +24% premium on an LST DOES trip the mask (a real
+        // LST premium never approaches 10% → broken anchor → UNKNOWN).
+        assert!(premium_sanity_violated(
+            AssetClass::Lst,
+            Decimal::from_str("-0.24").unwrap()
+        ));
+    }
+
+    #[test]
+    fn premium_informational_covers_synth_lev_but_sanity_masks_do_not() {
+        // premium→PEGGED set includes SynthLev …
+        assert!(premium_is_informational(AssetClass::SynthLev));
+        assert!(premium_is_informational(AssetClass::Lst));
+        assert!(premium_is_informational(AssetClass::StableYield));
+        assert!(!premium_is_informational(AssetClass::StableFiat));
+        // … but the sanity-mask set stays LST/yield-only (SynthLev excluded).
+        assert!(is_direction_sensitive(AssetClass::Lst));
+        assert!(is_direction_sensitive(AssetClass::StableYield));
+        assert!(!is_direction_sensitive(AssetClass::SynthLev));
+    }
+
+    #[test]
+    fn symmetric_class_premium_still_classifies_regression() {
+        // a fiat-stable premium is NOT informational → normal bands (guard the
+        // change didn't leak direction-awareness into symmetric classes).
+        assert_eq!(
+            state_for_bps_discount_aware(
+                AssetClass::StableFiat,
+                Decimal::from_str("-0.0150").unwrap(),
+                &bps_thresholds()
+            ),
+            PegState::Depeg
+        );
     }
 
     // ── Proptest helpers ──────────────────────────────────────────────────────

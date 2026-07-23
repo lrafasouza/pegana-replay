@@ -3,20 +3,56 @@
 //! Trust Layer's verifier-of-record. Fetches a Receipt from the API
 //! (`/v1/audit/:id/replay-bundle`) or a local `--bundle` JSON, then
 //! re-hashes the receipt's frozen inputs + recorded verdict and compares
-//! to the stored hash. Verifies the canonical receipt hash and its
-//! signer-pinned on-chain anchor, so anyone can confirm the published
-//! history wasn't altered (tamper-evidence). The CLI does NOT re-execute
-//! the methodology or re-derive the verdict — see ADR-0019.
+//! to the stored canonical hash — this alone proves the receipt's fields
+//! are internally self-consistent with the hash the server returned, NOT
+//! that the server didn't swap in a different, equally self-consistent
+//! receipt after the fact.
 //!
-//! Exit codes (per `docs/pegana-trust-layer-v0.1.0/10-distribution.md` §8):
-//!   0 — PASS  (hash matches)
-//!   1 — FAIL  (receipt sha256 mismatch — tamper or corruption)
-//!   2 — ERROR (network failure, malformed bundle, unknown alert)
-//!   3 — VERSION_MISMATCH (install the matching CLI version)
-//!   4 — ONCHAIN_MISMATCH (only when `--verify-onchain`)
+//! By DEFAULT (v0.5.0+), when run with `--alert-id`, the CLI additionally
+//! fetches the on-chain SPL Memo commitment for the alert and confirms (a)
+//! it was signed by one of Pegana's compile-time-pinned ops wallets and (b)
+//! its payload carries this exact receipt hash. THIS is the check that
+//! actually rules out post-hoc substitution: Solana's runtime only lands a
+//! transaction whose declared signer accounts produced a valid ed25519
+//! signature over it, so only the holder of the ops wallet's key can
+//! produce a matching anchor. Pass `--offline` to skip this and rely on
+//! the hash check alone (CI, air-gapped hosts). `--bundle` mode is always
+//! offline — a local file carries no `alert_id` to look an anchor up with.
+//!
+//! For schema-v2 receipts the CLI additionally re-derives the verdict from
+//! the frozen inputs. It does NOT re-execute the methodology against fresh
+//! oracle data, and it does NOT independently re-verify the ed25519
+//! signature bytes — it trusts the queried RPC's report that the account
+//! was a signer (cross-check the printed Solscan link against another RPC
+//! for a fully independent read). See ADR-0019 and ADR-0033.
+//!
+//! Exit codes (amends `docs/pegana-trust-layer-v0.1.0/10-distribution.md`
+//! §8 per ADR-0033):
+//!   0 — PASS  (hash matches; if --alert-id was used without --offline,
+//!              the on-chain anchor + pinned signer also matched)
+//!   1 — FAIL  (receipt sha256 mismatch, or v2 re-derivation mismatch —
+//!              tamper or corruption)
+//!   2 — ERROR (network failure fetching the bundle, malformed bundle,
+//!              unknown alert, or bad CLI usage)
+//!   3 — VERSION_MISMATCH (install the CLI build matching the receipt's
+//!              methodology_version)
+//!   4 — ONCHAIN_MISMATCH (a deliberate on-chain check FAILURE: wrong or
+//!              absent signer, no memo instruction, memo content mismatch,
+//!              or anchoring was expected and permanently failed —
+//!              retry_exhausted / wallet_drained)
+//!   5 — ONCHAIN_INCOMPLETE (the on-chain check could NOT be attempted or
+//!              completed — RPC/API unreachable, the anchor is still inside
+//!              its 24h commit window (ADR-0004 `pending`), OR a severe
+//!              transition (Depeg/Critical/BlackSwan) carries a terminal
+//!              `not_applicable` because on-chain commit was disabled for the
+//!              emitting deployment (no PEGANA_COMMIT_KEYPAIR) — the anchor the
+//!              policy expects is absent, not tampered. NOT a mismatch; the
+//!              hash result above still stands. Only reachable when --alert-id
+//!              is used without --offline.)
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
+use pegana_common_verify::PegState;
 use pegana_methodology::{
     canonical_assets_hash, canonical_receipt_hash, hex_sha256, methodology_version, rederive,
     Receipt,
@@ -45,8 +81,21 @@ use uuid::Uuid;
 /// pulling and rebuilding.
 const PEGANA_COMMIT_SIGNERS: &[&str] = &["7PpoyumFQMmcWzhJxDYr6iPv1fjYN41KBTA8xKKzu7R9"];
 
+/// Verify a Pegana alert against its published receipt.
 #[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
+#[command(
+    version,
+    about,
+    long_about = "Verify a Pegana alert against its published receipt.\n\n\
+        Always checks: the receipt's canonical SHA-256, recomputed from its \
+        frozen inputs, matches the hash the API/bundle claims (proves \
+        internal self-consistency).\n\n\
+        By default, when --alert-id is used, ALSO checks: the same hash is \
+        anchored on Solana in an SPL Memo signed by a pinned Pegana ops \
+        wallet (proves the receipt was not swapped after the fact). Skip \
+        this with --offline. --bundle mode is always offline — a local \
+        file carries no alert_id to look an anchor up with."
+)]
 struct Cli {
     /// Alert UUID to verify by fetching from the API.
     #[arg(long, conflicts_with = "bundle")]
@@ -60,11 +109,21 @@ struct Cli {
     #[arg(long, env = "PEGANA_API", default_value = "https://api.pegana.xyz")]
     api_url: String,
 
-    /// Additionally verify the on-chain memo commitment.
-    #[arg(long)]
+    /// Skip the on-chain anchor check and rely on the hash check alone.
+    /// On-chain verification (SPL Memo + pinned signer) runs BY DEFAULT
+    /// whenever --alert-id is used (v0.5.0+); pass --offline for CI,
+    /// air-gapped hosts, or when you deliberately only want the fast
+    /// hash-only tamper-evidence check. --bundle mode is always offline.
+    #[arg(long, alias = "no-onchain")]
+    offline: bool,
+
+    /// Deprecated, kept for backward compatibility with existing scripts.
+    /// On-chain verification is now the default for --alert-id — this flag
+    /// is a no-op. Use --offline if you want the OLD default (hash-only).
+    #[arg(long, hide = true)]
     verify_onchain: bool,
 
-    /// Solana RPC URL for --verify-onchain.
+    /// Solana RPC URL for the on-chain anchor check (skip via --offline).
     #[arg(
         long,
         env = "SOLANA_RPC_URL",
@@ -77,11 +136,37 @@ struct Cli {
     quiet: bool,
 }
 
-/// Only `not_applicable` (DRIFT / cost-gated alerts that are never anchored)
-/// may be skipped silently. Every other non-committed status means an anchor
-/// is expected and its absence must surface as a non-pass.
-fn onchain_skip_is_ok(commit_status: &str) -> bool {
-    commit_status == "not_applicable"
+/// The engine anchors on-chain ONLY for high-severity transitions
+/// (`engine-rs/main.rs`: `PegState::Depeg | Critical | BlackSwan`). Mirror that
+/// policy here so the verifier knows when a missing anchor is expected vs a gap.
+fn state_expects_anchor(state: PegState) -> bool {
+    matches!(
+        state,
+        PegState::Depeg | PegState::Critical | PegState::BlackSwan
+    )
+}
+
+/// A `not_applicable` commit_status may be skipped silently ONLY when the
+/// receipt's final state is one the engine never anchors on-chain
+/// (Pegged / Drift / Unknown — genuinely cost-exempt). A `not_applicable` on a
+/// state the anchor policy DOES cover (Depeg / Critical / BlackSwan) means the
+/// on-chain commit was disabled when the alert fired (e.g. PEGANA_COMMIT_KEYPAIR
+/// unset — the engine writes `not_applicable` "even for critical alerts" in that
+/// case, `engine-rs/main.rs`), so the anchor the policy expects is absent. That
+/// must NOT pass silently — the caller surfaces it as ONCHAIN_INCOMPLETE (exit 5,
+/// ADR-0033), never a false pass and never a tamper exit 4. Every other
+/// non-committed status always surfaces regardless of state.
+fn onchain_skip_is_ok(commit_status: &str, final_state: PegState) -> bool {
+    commit_status == "not_applicable" && !state_expects_anchor(final_state)
+}
+
+/// `pending` means an anchor attempt is in flight (ADR-0004's 24h retry
+/// window) — distinct from `not_applicable` (exempt, handled by
+/// `onchain_skip_is_ok`) and from a real terminal failure
+/// (`retry_exhausted` / `wallet_drained` / unrecognized, which still hard-
+/// fail as ANCHOR NOT VERIFIED, unchanged).
+fn is_onchain_pending(commit_status: &str) -> bool {
+    commit_status == "pending"
 }
 
 /// Check that the fee-payer / first account key of the transaction is in the
@@ -110,6 +195,13 @@ async fn main() {
 async fn run() -> Result<()> {
     let cli = Cli::parse();
 
+    if cli.verify_onchain && !cli.quiet {
+        eprintln!(
+            "Note: --verify-onchain is deprecated and now a no-op — on-chain \
+             verification runs by default for --alert-id. Pass --offline to skip it."
+        );
+    }
+
     let receipt: Receipt = match (&cli.alert_id, &cli.bundle) {
         (Some(id), _) => fetch_bundle(&cli.api_url, *id).await?,
         (None, Some(path)) => {
@@ -120,14 +212,42 @@ async fn run() -> Result<()> {
         (None, None) => bail!("provide either --alert-id <UUID> or --bundle <path>"),
     };
 
-    verify(&receipt, cli.quiet)?;
+    verify(&receipt, cli.quiet)?; // exits 1 directly on hash/re-derive mismatch
 
-    if cli.verify_onchain {
-        if let Some(id) = cli.alert_id {
-            verify_onchain(&cli.api_url, &cli.solana_rpc, id, &receipt, cli.quiet).await?;
-        } else if !cli.quiet {
-            // For --bundle only: skip onchain check (no alert_id known).
-            eprintln!("Note: --verify-onchain requires --alert-id (skipped for --bundle)");
+    // On-chain verification is the default for --alert-id (v0.5.0+, was
+    // opt-in via --verify-onchain before). --offline skips it explicitly;
+    // --bundle mode has no alert_id to look an anchor up with, so it is
+    // always offline regardless of the flag.
+    match (&cli.alert_id, cli.offline) {
+        (Some(id), false) => {
+            if let Err(e) =
+                verify_onchain(&cli.api_url, &cli.solana_rpc, *id, &receipt, cli.quiet).await
+            {
+                eprintln!("ONCHAIN_INCOMPLETE  {e:#}");
+                eprintln!(
+                    "  This is NOT a mismatch — the on-chain check could not be completed \
+                     (network/RPC issue, or the anchor isn't committed yet). The hash result \
+                     above still stands as tamper-evidence. Retry, check --solana-rpc / \
+                     --api-url, or pass --offline to skip this check."
+                );
+                std::process::exit(5);
+            }
+        }
+        (Some(_), true) => {
+            if !cli.quiet {
+                eprintln!(
+                    "Note: on-chain check skipped (--offline). PASS above is hash-only \
+                     tamper-evidence; it does not confirm the on-chain anchor."
+                );
+            }
+        }
+        (None, _) => {
+            if !cli.quiet {
+                eprintln!(
+                    "Note: on-chain check not available for --bundle (no alert_id to look \
+                     up an anchor for). PASS above is hash-only tamper-evidence."
+                );
+            }
         }
     }
 
@@ -265,11 +385,43 @@ async fn verify_onchain(
         // Parse commit_status to decide whether silence is safe.
         let body_404: serde_json::Value = resp.json().await.unwrap_or(serde_json::Value::Null);
         let status = body_404["commit_status"].as_str().unwrap_or("unknown");
-        if onchain_skip_is_ok(status) {
+        let final_state = receipt.expected_computed.final_state;
+        if onchain_skip_is_ok(status, final_state) {
             if !quiet {
-                eprintln!("Note: no on-chain anchor for this alert (commit_status: {status}) — expected for cost-gated transitions.");
+                eprintln!(
+                    "Note: no on-chain anchor for this alert (commit_status: {status}) — \
+                     expected; {final_state:?} transitions are never anchored on-chain.",
+                );
             }
             return Ok(());
+        }
+        // `not_applicable` on a state the anchor policy DOES cover
+        // (Depeg / Critical / BlackSwan): the engine's on-chain commit was
+        // disabled when this alert fired (e.g. PEGANA_COMMIT_KEYPAIR unset →
+        // `not_applicable` even for critical), so the anchor the policy expects
+        // is absent. The off-chain re-derivation already PASSED above; the
+        // on-chain leg is INCOMPLETE, not tampered. Bail (→ exit 5
+        // ONCHAIN_INCOMPLETE) rather than exit 4, so we never cry tamper on an
+        // operator config choice AND never silently pass a severe transition
+        // that lacks its policy-expected anchor.
+        if status == "not_applicable" {
+            bail!(
+                "severe transition ({final_state:?}) has no on-chain anchor \
+                 (commit_status: not_applicable) — on-chain commit was disabled when \
+                 this alert fired, so the anchor the policy expects for this state is \
+                 absent. Off-chain re-derivation PASSED; on-chain leg UNVERIFIABLE.",
+            );
+        }
+        // ADR-0004: `pending` means the anchor attempt is inside its 24h
+        // retry window — a legitimate transient state for a just-fired
+        // alert, NOT tamper evidence. Bail (propagate Err) rather than
+        // process::exit(4) here so run()'s handler reports it as
+        // ONCHAIN_INCOMPLETE (exit 5), never as ANCHOR NOT VERIFIED.
+        if is_onchain_pending(status) {
+            bail!(
+                "on-chain anchor not committed yet (status: pending, within the 24h \
+                 commit window — ADR-0004)"
+            );
         }
         eprintln!("ANCHOR NOT VERIFIED (status: {status})");
         std::process::exit(4);
@@ -457,7 +609,9 @@ async fn verify_onchain(
 
 #[cfg(test)]
 mod tests {
-    use super::{onchain_signer_ok, onchain_skip_is_ok, verify};
+    use super::{
+        is_onchain_pending, onchain_signer_ok, onchain_skip_is_ok, state_expects_anchor, verify,
+    };
     use chrono::DateTime;
     use pegana_common_verify::{AssetClass, PegState};
     use pegana_methodology::{
@@ -497,6 +651,7 @@ mod tests {
             pyth_entries: HashMap::<String, PythEntry>::new(),
             confirm_up_secs: 30,
             decay_down_secs: 120,
+            intrinsic_stale: false,
         }
     }
 
@@ -738,7 +893,24 @@ mod tests {
 
     #[test]
     fn onchain_404_pending_is_not_a_pass() {
-        assert!(onchain_skip_is_ok("not_applicable"));
+        // `not_applicable` is silently exempt ONLY for states the engine never
+        // anchors on-chain (Pegged / Drift / Unknown are cost-exempt).
+        for state in [PegState::Pegged, PegState::Drift, PegState::Unknown] {
+            assert!(
+                onchain_skip_is_ok("not_applicable", state),
+                "not_applicable on {state:?} (never anchored) must be exempt"
+            );
+        }
+        // `not_applicable` on a state the anchor policy COVERS means the anchor
+        // was disabled at emission — it must NOT pass silently (caller surfaces
+        // it as ONCHAIN_INCOMPLETE / exit 5, not a false pass).
+        for state in [PegState::Depeg, PegState::Critical, PegState::BlackSwan] {
+            assert!(
+                !onchain_skip_is_ok("not_applicable", state),
+                "not_applicable on {state:?} (anchor-expected) must surface, not pass"
+            );
+        }
+        // Every other non-committed status never passes, regardless of state.
         for s in [
             "pending",
             "retry_exhausted",
@@ -746,7 +918,47 @@ mod tests {
             "persistence_failed",
             "unknown",
         ] {
-            assert!(!onchain_skip_is_ok(s), "status {s} must not pass silently");
+            assert!(
+                !onchain_skip_is_ok(s, PegState::Pegged),
+                "status {s} must not pass silently"
+            );
+        }
+    }
+
+    #[test]
+    fn anchor_policy_matches_engine() {
+        // Mirrors engine-rs/main.rs: only Depeg/Critical/BlackSwan are anchored.
+        assert!(state_expects_anchor(PegState::Depeg));
+        assert!(state_expects_anchor(PegState::Critical));
+        assert!(state_expects_anchor(PegState::BlackSwan));
+        for state in [PegState::Pegged, PegState::Drift, PegState::Unknown] {
+            assert!(
+                !state_expects_anchor(state),
+                "{state:?} is never anchored on-chain"
+            );
+        }
+    }
+
+    // ── is_onchain_pending: `pending` is transient, never a mismatch ─────────
+
+    #[test]
+    fn is_onchain_pending_true_for_pending() {
+        assert!(is_onchain_pending("pending"));
+    }
+
+    #[test]
+    fn is_onchain_pending_false_for_others() {
+        for s in [
+            "not_applicable",
+            "committed",
+            "retry_exhausted",
+            "wallet_drained",
+            "unknown",
+        ] {
+            assert!(
+                !is_onchain_pending(s),
+                "status {s} must not read as pending"
+            );
         }
     }
 }

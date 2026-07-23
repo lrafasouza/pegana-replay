@@ -1,8 +1,8 @@
-# Pegana — Asset universe. 65 entries; ~64 active on mainnet (1 inactive via
-# `active = false`). NOTE: calibration status (calibrated vs monitoring_only / beta)
+# Pegana — Asset universe. 72 entries; 69 active on mainnet (3 inactive via
+# `active = false`: BRZ, pbUSDC, dSOL). NOTE: calibration status (calibrated vs monitoring_only / beta)
 # is NOT declared in this file — it is set by DB migrations (0048+); do not infer
 # the beta split from here. Keep these counts in sync when adding entries or
-# flipping `active`. Last updated 2026-06-30.
+# flipping `active`. Last updated 2026-07-19.
 #
 # Each asset declares:
 #   - identity:        symbol, mint, name, decimals, token_program
@@ -1143,6 +1143,141 @@ market = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
 pyth_feed_id = ""
 thresholds_bps = { drift = 55, depeg = 140, critical = 300 }
 
+# ============================================================
+# LST coverage expansion (2026-07-15) — 6 new Sanctum-verified LSTs
+# (>$20M TVL each) + dSOL reactivation. Mints cross-confirmed against
+# extra-api.sanctum.so/v1/lsts (exact mint+symbol match required) and
+# lst-directory.com/api/directory (TVL + liveness flags). Candidates that
+# did NOT verify were skipped — see migration notes / commit message.
+# ============================================================
+
+[[assets]]
+symbol = "dumSOL"
+name = "Dum Staked SOL"
+mint = "cPQPBN7WubB3zyQDpzTK2ormx1BMdAym9xkrYUJsctm"
+verified = true   # mint+symbol confirmed via extra-api.sanctum.so/v1/lsts 2026-07-15; $150M TVL via lst-directory.com
+decimals = 9
+token_program = "spl"
+class = "lst"
+peg_target = "SOL"
+intrinsic = { kind = "sanctum_lst", symbol = "dumSOL" }
+market = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id = ""
+thresholds_bps = { drift = 55, depeg = 140, critical = 300 }
+
+[[assets]]
+symbol = "sctmSOL"
+name = "Sanctum Staked SOL"
+mint = "sctmAy9zFfZznZUWxEMgGtF6PHZ3gwoiCGcfwRua1AZ"
+verified = true   # mint+symbol confirmed via extra-api.sanctum.so/v1/lsts 2026-07-15; $140M TVL via lst-directory.com
+decimals = 9
+token_program = "spl"
+class = "lst"
+peg_target = "SOL"
+intrinsic = { kind = "sanctum_lst", symbol = "sctmSOL" }
+market = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id = ""
+thresholds_bps = { drift = 55, depeg = 140, critical = 300 }
+
+[[assets]]
+symbol = "xSHIN"
+name = "Shinobi Performance Pool Token"
+mint = "xSoL18r4U1k2ALa4yF857VDZJqCKecLtty92nscre3o"
+verified = true   # mint+symbol confirmed via extra-api.sanctum.so/v1/lsts 2026-07-15; $87M TVL via lst-directory.com
+decimals = 9
+token_program = "spl"
+class = "lst"
+peg_target = "SOL"
+intrinsic = { kind = "sanctum_lst", symbol = "xSHIN" }
+market = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id = ""
+thresholds_bps = { drift = 55, depeg = 140, critical = 300 }
+
+[[assets]]
+symbol = "aeroSOL"
+name = "aeroSOL"
+mint = "aeroXvCT6tjGVNyTvZy86tFDwE4sYsKCh7FbNDcrcxF"
+verified = true   # mint+symbol confirmed via extra-api.sanctum.so/v1/lsts 2026-07-15; $84M TVL via lst-directory.com
+decimals = 9
+token_program = "spl"
+class = "lst"
+peg_target = "SOL"
+intrinsic = { kind = "sanctum_lst", symbol = "aeroSOL" }
+market = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id = ""
+thresholds_bps = { drift = 55, depeg = 140, critical = 300 }
+
+[[assets]]
+symbol = "dfdvSOL"
+name = "DeFi Development Corp Staked SOL"
+mint = "sctmB7GPi5L2Q5G9tUSzXvhZ4YiDMEGcRov9KfArQpx"
+verified = true   # mint+symbol confirmed via extra-api.sanctum.so/v1/lsts 2026-07-15; $65M TVL via lst-directory.com
+decimals = 9
+token_program = "spl"
+class = "lst"
+peg_target = "SOL"
+intrinsic = { kind = "sanctum_lst", symbol = "dfdvSOL" }
+market = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id = ""
+thresholds_bps = { drift = 55, depeg = 140, critical = 300 }
+
+[[assets]]
+symbol = "GTSOL"
+name = "Gate Wrapped SOL"
+mint = "gateMurAxe4YFoUR6J63gXGKtkbTfdkMdLjZrCmThFP"
+verified = true   # mint+symbol confirmed via extra-api.sanctum.so/v1/lsts 2026-07-15; $48M TVL via lst-directory.com
+decimals = 9
+token_program = "spl"
+class = "lst"
+peg_target = "SOL"
+intrinsic = { kind = "sanctum_lst", symbol = "GTSOL" }
+market = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id = ""
+thresholds_bps = { drift = 55, depeg = 140, critical = 300 }
+
+# ⚠️ DEFERRED 2026-07-17 — the reactivation described below is SPLIT OUT and the
+# entry is kept active=false. A backend launch-readiness audit found the INTRINSIC
+# side has NO liveness gate: a frozen-but-served backing (dead pool / halted
+# rewards) passes the 600s TIMESTAMP-only staleness (sanctum.rs re-stamps ts=now)
+# as a confident false PEGGED — exactly the 2026-04-01 dSOL failure. And
+# monitoring_only can no longer contain it (it became a beta LABEL, not an egress
+# gate, on 2026-06-16 — dispatches alerts anyway). So dSOL stays deactivated until
+# the intrinsic-liveness gate (backing-advancement / epoch-clock) ships; it is then
+# reactivated WITH that gate protecting it. The rationale below is still valid on the
+# merits (the pool is demonstrably alive) — it's the MISSING GATE, not dSOL's health,
+# that defers it. See ADR (intrinsic-liveness) + docs/incident-2026-04-01-drift.md.
+#
+# dSOL reactivation (2026-07-15) — reverses the 2026-04-01 Drift-exploit
+# deactivation from migration 0020 / docs/incident-2026-04-01-drift.md, which
+# predicted reactivation was "almost certainly never" going to happen. Live
+# verification today says otherwise:
+#   - extra-api.sanctum.so/v1/lsts still lists this exact mint under a
+#     SanctumSpl stake-pool (vote account DriFTm3wM9ugxhCA1K3wVQMSdC4Dv4LNmyZMmZiuHRpp,
+#     Drift's own validator) — structurally separate infrastructure from the
+#     perps/lending program that was reportedly exploited; native-stake LSTs
+#     aren't drainable via a DEX-program admin-key compromise.
+#   - lst-directory.com/api/directory shows $217.4M TVL, 4,469 holders,
+#     flags {stale:false, dead:false, deprecated:false}, and — decisively —
+#     a monotonically increasing exchange rate over the last 5 epochs
+#     (1.203178 -> 1.204609), i.e. staking yield is actively accruing.
+#     A frozen/rugged stake pool cannot produce that rate curve.
+# This is a real reversal of a documented incident response, not a routine
+# add — founder should confirm before this ships to production monitoring.
+[[assets]]
+symbol = "dSOL"
+name = "Drift Staked SOL"
+mint = "Dso1bDeDjCQxTrWHqUUi63oBvV7Mdm6WaobLbQ7gnPQ"
+verified = true   # mint unchanged since original migration 0002 seed; re-confirmed via extra-api.sanctum.so/v1/lsts 2026-07-15
+decimals = 9
+token_program = "spl"
+class = "lst"
+peg_target = "SOL"
+intrinsic = { kind = "sanctum_lst", symbol = "dSOL" }
+market = { kind = "jupiter_usd", numeraire = "SOL", numeraire_feed = "SOL/USD" }
+pyth_feed_id = "0x41f858bae36e7ee3f4a3a6d4f176f0893d4a261460a52763350d00f8648195ee"
+thresholds_bps = { drift = 55, depeg = 140, critical = 300 }   # reset to current LST batch default; pre-freeze calibration (30/120/350) is 3.5mo stale
+active         = false  # DEFERRED 2026-07-17 — reactivation split out of mig 0064 pending the intrinsic-liveness gate (see the ⚠️ note above). Prod is already is_active=false.
+
 [[assets]]
 symbol = "USD*"
 name = "Perena USD Star"
@@ -1199,6 +1334,19 @@ thresholds_bps = { drift = 50, depeg = 200, critical = 500 }
 "EUSX/USX.RR" = "0xf36e12e65d2969b242fb97d3ebaa32ec55d5794189b64d1a07dc4f41425c9378"
 "PST/USDC.RR" = "0x675e36f84a6be779ed793c71eb5c03151e1866c125767f46933626e0610af84d"
 
+# 3-leg source-divergence oracle feeds (2026-07-17) — the <asset>/USD Pyth spot
+# for the USD-pegged jupiter_usd stables (PYUSD/USDe/USDS), so the "sources
+# disagree" oracle leg on /asset lights up for them. These names are NOT
+# referenced by any asset strategy (all three use `jupiter_usd` for market), so
+# they stream to `oracle_snapshots` ONLY — no market/intrinsic override (the
+# spot_map/redemption_map routing in pyth.rs is built from strategies, not from
+# [pyth_feeds]). Verified live on hermes.pyth.network 2026-07-17 (PYUSD $1.0000,
+# USDE $0.9998, USDS $0.9999, all <5s fresh) and each id === the asset's own
+# pyth_feed_id (Crypto.{PYUSD,USDE,USDS}/USD).
+"PYUSD/USD"   = "0xc1da1b73d7f01e7ddd54b3766cf7fcd644395ad14f70aa706ec5384c59e76692"
+"USDE/USD"    = "0x6ec879b1e9963de5ee97e9c8710b742d6228252a5e2ca12d4ae81d7fe5ee8c5d"
+"USDS/USD"    = "0x77f0971af11cc8bac224917275c1bf55f2319ed5c654a1ca955c82fa2d297ea1"
+
 # ============================================================
 # Polling cadences (env vars override these)
 # ============================================================
@@ -1224,7 +1372,12 @@ pyth_stream_reconnect_backoff_max_ms = 30000
 default_secs = 30
 
 [pyth_staleness.overrides]
-"USDY/USD"            = 129600   # 36h — daily Ondo NAV step
+# The override must target the daily-stepping INTRINSIC feed (`.RR` redemption
+# rate), NOT the continuously-updating spot `USDY/USD` market feed. Keying the
+# spot feed (the pre-fix bug) left the `.RR` intrinsic on the 30s default →
+# stale >600s for ~23h/day after each daily Ondo push → USDY verdict frozen at
+# UNKNOWN most of the day. Every sibling below correctly keys its `.RR`/`.NAV`.
+"USDY/USD.RR"        = 129600   # 36h — daily Ondo NAV step (intrinsic redemption rate)
 "SUSDE/USDE.RR"       = 129600   # 36h — daily Ethena redemption rate
 "SYRUPUSDC/USDC.RR"   = 129600   # 36h — daily Maple redemption rate
 "ONYC/USD.NAV"        = 604800   # 7d  — weekly Ondo NAV step

@@ -6,6 +6,13 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// `skip_serializing_if` predicate for the additive `intrinsic_stale` flag: a
+/// `false` value is OMITTED from the canonical JCS, so every pre-existing /
+/// gate-disabled receipt hashes byte-identically to before the field was added.
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PythEntry {
     pub price: Decimal,
@@ -44,6 +51,18 @@ pub struct InputsFrozen {
     pub pyth_entries: HashMap<String, PythEntry>,
     pub confirm_up_secs: i64,
     pub decay_down_secs: i64,
+    /// Intrinsic-liveness gate (ADR-0038): the frozen "backing is stale" verdict
+    /// at decision time — `flags.stale` for a sanctum_lst, or a stalled
+    /// (`epoch_lag >= 2`) SPL stake-pool crank. When `true`, the methodology
+    /// forces the state to UNKNOWN (a frozen-but-served backing must not read as
+    /// a confident peg — the 2026-04-01 dSOL failure mode). The ENGINE only sets
+    /// this when `INTRINSIC_LIVENESS_GATE` is enabled, so the gate ships DISABLED
+    /// by default (depth-gate / ADR-0034 pattern): disabled → always `false` →
+    /// omitted from the canonical hash (`skip_serializing_if`) → every existing
+    /// receipt + the backtest golden are byte-identical, and the verdict is
+    /// provably unchanged. Additive + serde-default so old receipts deserialize.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub intrinsic_stale: bool,
 }
 
 /// Engine output frozen into the receipt. Same NO-FLOATS invariant as
@@ -128,6 +147,7 @@ mod tests {
             pyth_entries: HashMap::new(),
             confirm_up_secs: 30,
             decay_down_secs: 120,
+            intrinsic_stale: false,
         }
     }
 
