@@ -280,13 +280,23 @@ fn verify(receipt: &Receipt, quiet: bool) -> Result<()> {
     let cli_version = methodology_version();
     if receipt.methodology_version != cli_version {
         eprintln!(
-            "VERSION_MISMATCH: alert uses methodology v{}; this CLI is v{}.",
+            "VERSION_MISMATCH: this receipt was produced by methodology v{}, but this \
+             pegana-replay build embeds methodology v{}. Verification is exact-match by design.",
             receipt.methodology_version, cli_version
         );
+        // Install via crates.io (the canonical, always-available channel) rather
+        // than a bespoke install.sh mirror: `cargo install pegana-replay` needs no
+        // custom DNS and the latest release always embeds the current methodology.
+        // The CLI is versioned independently of the methodology it embeds (e.g.
+        // pegana-replay 0.5.0 embeds methodology 0.7.0), so for an OLDER receipt
+        // the user picks the matching historical build from the crates.io version
+        // list rather than a methodology-numbered tag.
         eprintln!(
-            "Install the matching version:\n  curl --proto '=https' --tlsv1.2 -LsSf \
-             https://releases.pegana.xyz/install.sh | PEGANA_REPLAY_VERSION=v{} sh",
-            receipt.methodology_version
+            "Install the pegana-replay build that embeds methodology v{ver}:\n  \
+             cargo install pegana-replay          # latest release — verifies current-methodology receipts\n  \
+             # older receipt? pick the build embedding methodology v{ver} at \
+             https://crates.io/crates/pegana-replay/versions",
+            ver = receipt.methodology_version
         );
         std::process::exit(3);
     }
